@@ -4,5 +4,143 @@ category: caching
 tier: written
 summary: "Content delivery networks: caching at the edge so users hit a server 20ms away instead of 200ms."
 order: 3
+resources: [cdn-article, cdn-deep-dive]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+No amount of server tuning fixes a request that has to cross the planet. Light in fiber covers roughly 200km per millisecond, so Sydney to a server in Virginia is about 200ms round trip before your code runs a single instruction. A CDN accepts that you cannot beat the speed of light and does the only thing left: it moves the bytes closer to the user.
+
+## Distance is latency
+
+The propagation delay is bad, but the multiplier makes it brutal. A fresh HTTPS connection needs a DNS lookup, a TCP handshake, and a TLS handshake before the first response byte — three to four round trips. Over a 200ms path, that is 600-800ms of pure waiting; over a 20ms path to a nearby edge server, the same handshakes finish in under 100ms. That is the whole pitch: a CDN places caches so that, for almost every user on Earth, "the server" is 10-30ms away instead of 100-300ms.
+
+<Diagram caption="A cache hit at a nearby edge PoP turns a 200ms round trip into a 20ms one; only misses travel to the origin.">
+  <svg viewBox="0 0 640 205" width="100%" role="img" aria-label="Two request paths compared: without a CDN, a user reaches the origin over a 200ms round trip; with a CDN, the user reaches a nearby edge PoP in 20ms, and only cache misses continue to the origin.">
+    <defs>
+      <marker id="arr-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <text x="10" y="20" class="svg-label small muted">without a CDN</text>
+    <rect x="10" y="32" width="100" height="46" rx="8" class="f-inset s-border" />
+    <text x="60" y="60" text-anchor="middle" class="svg-label">user</text>
+    <rect x="530" y="32" width="100" height="46" rx="8" class="f-inset s-border" />
+    <text x="580" y="60" text-anchor="middle" class="svg-label">origin</text>
+    <line x1="112" y1="55" x2="526" y2="55" class="s-muted" stroke-width="1.5" marker-end="url(#arr-a)" />
+    <text x="320" y="46" text-anchor="middle" class="svg-label small muted">~200ms round trip, every request</text>
+    <text x="10" y="130" class="svg-label small muted">with a CDN</text>
+    <rect x="10" y="142" width="100" height="46" rx="8" class="f-inset s-border" />
+    <text x="60" y="170" text-anchor="middle" class="svg-label">user</text>
+    <rect x="250" y="142" width="130" height="46" rx="8" class="f-inset s-accent" />
+    <text x="315" y="170" text-anchor="middle" class="svg-label">edge PoP</text>
+    <rect x="530" y="142" width="100" height="46" rx="8" class="f-inset s-border" />
+    <text x="580" y="170" text-anchor="middle" class="svg-label">origin</text>
+    <line x1="112" y1="165" x2="246" y2="165" class="s-muted" stroke-width="1.5" marker-end="url(#arr-a)" />
+    <text x="180" y="156" text-anchor="middle" class="svg-label small">~20ms hit</text>
+    <line x1="382" y1="165" x2="526" y2="165" class="s-muted" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arr-a)" />
+    <text x="454" y="156" text-anchor="middle" class="svg-label small muted">miss only</text>
+  </svg>
+</Diagram>
+
+## A reverse proxy, everywhere
+
+Architecturally, a CDN is a globally distributed reverse-proxy cache (the proxy concept itself is covered under Proxy vs Reverse Proxy). Each point of presence (PoP) is a rack of cache servers in a city; Cloudflare operates PoPs in 300+ cities, Akamai in thousands of locations, CloudFront in hundreds of edge locations, and Fastly in roughly a hundred high-capacity PoPs. Two mechanisms steer users to the nearest one:
+
+- **Anycast** (Cloudflare): every PoP announces the same IP address, and internet routing (BGP) delivers each packet to the topologically closest PoP.
+- **DNS-based steering** (Akamai, CloudFront): the CDN's DNS server returns a different PoP address depending on where the resolver query comes from.
+
+A request that hits a warm PoP is answered on the spot; a miss is forwarded to your origin, cached, and served to every subsequent user in that region.
+
+## Filling the edge: pull vs push
+
+| | Pull (origin pull) | Push (pre-upload) |
+|---|---|---|
+| How content arrives | Edge fetches from origin on first miss | You upload objects to the CDN ahead of time |
+| First-request latency | Slow — the first user pays the origin trip | Fast — content is already at the edge |
+| Freshness | TTL-driven, automatic | You manage what is uploaded and when |
+| Operational cost | Nearly zero setup | A sync pipeline you must build and monitor |
+| Best for | Websites, APIs, long-tail assets | Big predictable releases: game patches, video launches |
+
+Pull is the default and correct for almost everyone. Push earns its keep when a known object will be requested by millions of users the moment it goes live and a global miss stampede would flatten the origin.
+
+## Cache keys and TTLs
+
+The edge stores objects under a cache key — by default the host plus URL path, optionally extended with the query string, selected headers, or cookies. Every dimension you add fragments the cache: vary on a session cookie and every user gets a private, useless copy, so your hit ratio collapses to zero. Keep keys as coarse as correctness allows.
+
+Freshness is controlled by the origin through standard HTTP headers:
+
+```http
+Cache-Control: public, max-age=60, s-maxage=86400, stale-while-revalidate=30
+```
+
+- `max-age` governs browsers; `s-maxage` overrides it for shared caches like CDNs — a common pattern is short browser TTLs with long edge TTLs, since you can purge the edge but not users' browsers.
+- `stale-while-revalidate` lets the edge serve the expired copy instantly while refetching in the background.
+- Content-hashed filenames (`app.3f9c1b.js`) plus `Cache-Control: immutable, max-age=31536000` make invalidation unnecessary: a new deploy is a new URL.
+
+Eviction under memory pressure is the CDN's problem, not yours — the theory lives in Caching Strategies & Eviction Policies.
+
+## Invalidation
+
+When you must remove content before its TTL expires, you have three options with very different latencies:
+
+- **Let the TTL expire.** Free, but a 24-hour TTL means up to 24 hours of stale content.
+- **Purge via API.** Fastly propagates a purge globally in about 150ms; CloudFront invalidations take seconds to minutes and are billed per path beyond a free tier. Surrogate keys (cache tags) let you purge "everything about product 42" in one call.
+- **Change the URL.** Versioned assets sidestep invalidation entirely and should be your default for static files.
+
+The purge path is also the failure path to think about: an aggressive purge of a hot object turns every PoP into a simultaneous miss.
+
+## Origin shield
+
+That simultaneous miss is called a miss storm: hundreds of PoPs fetching from the origin at once. An origin shield designates one PoP as a mid-tier cache that all others fetch through. Combined with request collapsing — concurrent requests for the same key wait on a single fetch, the same request coalescing that guards single-node caches in Caching Strategies & Eviction Policies — a global stampede becomes one origin request.
+
+<Diagram caption="With an origin shield, simultaneous misses from many edge PoPs collapse into a single origin fetch.">
+  <svg viewBox="0 0 640 240" width="100%" role="img" aria-label="Three edge PoPs in Tokyo, London, and Virginia all miss at once; their requests converge on an origin shield PoP, which makes a single fetch to the origin.">
+    <defs>
+      <marker id="arr-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="20" y="20" width="150" height="44" rx="8" class="f-inset s-border" />
+    <text x="95" y="47" text-anchor="middle" class="svg-label">edge (Tokyo)</text>
+    <rect x="20" y="98" width="150" height="44" rx="8" class="f-inset s-border" />
+    <text x="95" y="125" text-anchor="middle" class="svg-label">edge (London)</text>
+    <rect x="20" y="176" width="150" height="44" rx="8" class="f-inset s-border" />
+    <text x="95" y="203" text-anchor="middle" class="svg-label">edge (Virginia)</text>
+    <rect x="300" y="98" width="150" height="44" rx="8" class="f-inset s-accent" />
+    <text x="375" y="125" text-anchor="middle" class="svg-label">origin shield</text>
+    <text x="375" y="162" text-anchor="middle" class="svg-label small muted">collapses misses</text>
+    <rect x="520" y="98" width="100" height="44" rx="8" class="f-inset s-border" />
+    <text x="570" y="125" text-anchor="middle" class="svg-label">origin</text>
+    <line x1="172" y1="42" x2="296" y2="110" class="s-muted" stroke-width="1.5" marker-end="url(#arr-b)" />
+    <line x1="172" y1="120" x2="296" y2="120" class="s-muted" stroke-width="1.5" marker-end="url(#arr-b)" />
+    <line x1="172" y1="198" x2="296" y2="130" class="s-muted" stroke-width="1.5" marker-end="url(#arr-b)" />
+    <line x1="452" y1="120" x2="516" y2="120" class="s-muted" stroke-width="1.5" marker-end="url(#arr-b)" />
+    <text x="484" y="108" text-anchor="middle" class="svg-label small">one fetch</text>
+  </svg>
+</Diagram>
+
+## More than static files
+
+Modern CDNs earn money on traffic they cannot cache:
+
+- **TLS termination at the edge.** Handshake round trips happen over the 20ms hop, and the CDN keeps warm, long-lived connections to your origin over its private backbone.
+- **Dynamic route optimization.** Even uncacheable API calls often get faster because the middle of the journey rides the provider's optimized network instead of the public internet.
+- **Edge compute.** Cloudflare Workers, Fastly Compute, and Lambda@Edge run small functions at the PoP — A/B bucketing, auth checks, redirects — without an origin round trip.
+- **Signed URLs and cookies.** For private content (video, paid downloads), the origin issues a short-lived signature the edge verifies locally, so private bytes still get cache-hit economics.
+
+## The economics: offload
+
+The health metric for a CDN deployment is offload: the fraction of requests — or better, bytes — served without touching the origin. Static assets should offload at 95-99%. High offload means the origin is sized for a few percent of real traffic, absorbs launch-day spikes, and pays a fraction of the egress bill. If your offload is 40%, you have a cache-key or TTL problem, not a CDN problem.
+
+## Trade-offs and pitfalls
+
+- **Caching a personalized response** is the classic CDN outage: one user's account page cached and served to everyone. Never let `Set-Cookie` responses or authenticated pages become publicly cacheable.
+- **Fragmented cache keys** — varying on full query strings or `User-Agent` — silently destroy hit ratio.
+- **Long TTLs fight fast fixes.** Decide your purge story before you need it during an incident.
+- **A new global dependency.** The June 2021 Fastly outage took a visible chunk of the web offline for an hour; the CDN is now in your critical path and your debugging path (always surface cache-status headers).
+- **Cost surprises** at scale: egress pricing, per-path invalidation fees, request fees.
+
+## When to reach for it
+
+Use a CDN when users are geographically far from your origin, when you serve media or heavy static assets, or when traffic is spiky enough that origin capacity planning hurts — in practice, any public website benefits from free-tier edge caching of static files. Skip it when all your users sit in one region near your servers, or traffic is almost entirely authenticated and uncacheable: a single well-placed region serves those users in under 50ms. Start with pull-based caching of hashed static assets, measure offload, and expand TTLs from there.

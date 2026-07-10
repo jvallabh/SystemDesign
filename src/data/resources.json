@@ -27,5 +27,11 @@
   "concurrency-parallelism-video": { "title": "Concurrency vs Parallelism (video)", "url": "https://youtu.be/RlM9AfWf1WU" },
   "polling-websockets-video": { "title": "Long Polling vs WebSockets (video)", "url": "https://youtu.be/ZBM28ZPlin8" },
   "stateful-stateless-video": { "title": "Stateful vs Stateless Architecture (video)", "url": "https://youtu.be/P8D6P-6KVNM" },
-  "batch-stream-video": { "title": "Batch vs Stream Processing (video)", "url": "https://youtu.be/7PjPhgCoT9c" }
+  "batch-stream-video": { "title": "Batch vs Stream Processing (video)", "url": "https://youtu.be/7PjPhgCoT9c" },
+  "cdn-article": { "title": "What is a CDN? (AWS)", "url": "https://aws.amazon.com/what-is/cdn/" },
+  "cdn-deep-dive": { "title": "Content delivery networks (web.dev)", "url": "https://web.dev/articles/content-delivery-networks" },
+  "cdc-confluent-article": { "title": "Change Data Capture explained (Confluent)", "url": "https://www.confluent.io/learn/change-data-capture/" },
+  "cdc-redhat-article": { "title": "What is Change Data Capture? (Red Hat)", "url": "https://www.redhat.com/en/topics/integration/what-is-change-data-capture" },
+  "caching-strategies-article": { "title": "Caching Strategies and How to Choose the Right One (CodeAhoy)", "url": "https://codeahoy.com/2017/08/11/caching-strategies-and-how-to-choose-the-right-one/" },
+  "caching-patterns-aws": { "title": "Database caching patterns (AWS whitepaper)", "url": "https://docs.aws.amazon.com/whitepapers/latest/database-caching-strategies-using-redis/caching-patterns.html" }
 }

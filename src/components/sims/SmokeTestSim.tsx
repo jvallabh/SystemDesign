@@ -75,9 +75,9 @@ export default function SmokeTestSim() {
           height={H - 2}
           rx="8"
           fill="none"
-          stroke="var(--border)"
+          className="s-border"
         />
-        <circle cx={w.x} cy={w.y} r={R} fill="var(--accent)" />
+        <circle cx={w.x} cy={w.y} r={R} className="f-accent" />
       </svg>
     </SimFrame>
   );

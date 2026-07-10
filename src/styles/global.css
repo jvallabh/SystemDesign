@@ -78,3 +78,28 @@ svg {
 .skip-link:focus {
   left: 0;
 }
+
+/* SVG color utilities — SVG presentation attributes cannot use var(), so
+   themed fills/strokes go through classes (className in .tsx, class in .mdx).
+   Dynamic colors in sims use style objects instead: style={{ fill: 'var(--ok)' }}. */
+.f-accent { fill: var(--accent); }
+.f-accent-2 { fill: var(--accent-2); }
+.f-accent-dim { fill: var(--accent-dim); }
+.f-text { fill: var(--text); }
+.f-muted { fill: var(--text-muted); }
+.f-ok { fill: var(--ok); }
+.f-danger { fill: var(--danger); }
+.f-bg { fill: var(--bg); }
+.f-inset { fill: var(--bg-inset); }
+.f-raised { fill: var(--bg-raised); }
+.f-border { fill: var(--border); }
+.s-accent { stroke: var(--accent); }
+.s-accent-2 { stroke: var(--accent-2); }
+.s-border { stroke: var(--border); }
+.s-text { stroke: var(--text); }
+.s-muted { stroke: var(--text-muted); }
+.s-ok { stroke: var(--ok); }
+.s-danger { stroke: var(--danger); }
+.svg-label { font-family: var(--font-mono); font-size: 13px; fill: var(--text); }
+.svg-label.muted { fill: var(--text-muted); }
+.svg-label.small { font-size: 11px; }

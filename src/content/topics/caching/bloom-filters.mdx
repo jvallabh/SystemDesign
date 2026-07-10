@@ -2,9 +2,189 @@
 title: "Bloom Filters"
 category: caching
 tier: flagship
-summary: "A tiny probabilistic set that answers \"definitely not present\" — insert keys and hunt for false positives."
+summary: "A tiny probabilistic set that answers \"definitely not present\" in a few bits per key — insert keys and hunt for false positives."
 order: 2
 sim: BloomFiltersSim
 resources: [bloom-filters-video]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+import BloomFiltersSim from '../../../components/sims/BloomFiltersSim';
+
+Most lookups in a big system are for keys that do not exist: a cache miss, a crawler re-checking a URL, a storage engine probing a file on disk. Paying a disk seek or a network hop just to learn "not here" is the most expensive way to learn nothing. A bloom filter is a set membership test that fits in a few bits per element and answers in constant time — with one asymmetry that makes the whole design work: **"no" is always correct, "yes" is only probably correct.**
+
+## How it works
+
+A bloom filter is an array of `m` bits, all starting at 0, plus `k` independent hash functions that each map a key to a bit position.
+
+- **Insert(key):** compute the `k` hashes, set those `k` bits to 1.
+- **Query(key):** compute the same `k` hashes, check those `k` bits. If *any* is 0, the key was definitely never inserted. If *all* are 1, the key was *probably* inserted.
+
+Walk through a tiny example with `m = 16` bits and `k = 2` hash functions:
+
+1. `insert("cat")` — hashes to positions 2 and 11. Set both bits.
+2. `insert("dog")` — hashes to positions 5 and 14. Set both bits.
+3. `query("cat")` — bits 2 and 11 are both 1 → "probably yes". Correct.
+4. `query("bird")` — hashes to positions 7 and 14. Bit 7 is 0 → "definitely no". Correct, and it only cost two bit reads.
+5. `query("fox")` — hashes to positions 5 and 11. Bit 5 was set by dog, bit 11 by cat. Both are 1 → "probably yes". Wrong. That is a **false positive**.
+
+<Diagram caption="Two inserts set four bits; a query for an absent key collides with bits set by other keys and reports a false positive.">
+  <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="A 16-bit array. insert cat sets bits 2 and 11, insert dog sets bits 5 and 14. A query for fox checks bits 5 and 11, which are both set by other keys, producing a false positive.">
+    <defs>
+      <marker id="bf-arr-a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" class="f-accent" />
+      </marker>
+      <marker id="bf-arr-b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" class="f-accent-2" />
+      </marker>
+      <marker id="bf-arr-d" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" class="f-danger" />
+      </marker>
+    </defs>
+    <text x="140" y="42" text-anchor="middle" class="svg-label">insert("cat")</text>
+    <line x1="140" y1="52" x2="134" y2="126" class="s-accent" stroke-width="1.5" marker-end="url(#bf-arr-a)" />
+    <line x1="160" y1="52" x2="436" y2="126" class="s-accent" stroke-width="1.5" marker-end="url(#bf-arr-a)" />
+    <text x="470" y="42" text-anchor="middle" class="svg-label">insert("dog")</text>
+    <line x1="450" y1="52" x2="238" y2="126" class="s-accent-2" stroke-width="1.5" marker-end="url(#bf-arr-b)" />
+    <line x1="490" y1="52" x2="540" y2="126" class="s-accent-2" stroke-width="1.5" marker-end="url(#bf-arr-b)" />
+    <rect x="48" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="82" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="116" y="130" width="34" height="34" class="f-accent-dim s-accent" />
+    <rect x="150" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="184" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="218" y="130" width="34" height="34" class="f-accent-dim s-accent-2" />
+    <rect x="252" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="286" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="320" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="354" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="388" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="422" y="130" width="34" height="34" class="f-accent-dim s-accent" />
+    <rect x="456" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="490" y="130" width="34" height="34" class="f-inset s-border" />
+    <rect x="524" y="130" width="34" height="34" class="f-accent-dim s-accent-2" />
+    <rect x="558" y="130" width="34" height="34" class="f-inset s-border" />
+    <text x="65" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="99" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="133" y="152" text-anchor="middle" class="svg-label">1</text>
+    <text x="167" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="201" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="235" y="152" text-anchor="middle" class="svg-label">1</text>
+    <text x="269" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="303" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="337" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="371" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="405" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="439" y="152" text-anchor="middle" class="svg-label">1</text>
+    <text x="473" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="507" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="541" y="152" text-anchor="middle" class="svg-label">1</text>
+    <text x="575" y="152" text-anchor="middle" class="svg-label">0</text>
+    <text x="65" y="182" text-anchor="middle" class="svg-label small muted">0</text>
+    <text x="133" y="182" text-anchor="middle" class="svg-label small muted">2</text>
+    <text x="235" y="182" text-anchor="middle" class="svg-label small muted">5</text>
+    <text x="337" y="182" text-anchor="middle" class="svg-label small muted">8</text>
+    <text x="439" y="182" text-anchor="middle" class="svg-label small muted">11</text>
+    <text x="541" y="182" text-anchor="middle" class="svg-label small muted">14</text>
+    <text x="575" y="182" text-anchor="middle" class="svg-label small muted">15</text>
+    <line x1="320" y1="248" x2="240" y2="170" class="s-danger" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#bf-arr-d)" />
+    <line x1="360" y1="248" x2="436" y2="170" class="s-danger" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#bf-arr-d)" />
+    <text x="340" y="268" text-anchor="middle" class="svg-label">query("fox")</text>
+    <text x="340" y="288" text-anchor="middle" class="svg-label small muted">bits 5 and 11 already set by other keys — false positive</text>
+  </svg>
+</Diagram>
+
+The asymmetry falls straight out of the mechanics. Bits only ever flip from 0 to 1 — so a probed 0 proves no insert touched that key, and "no" is a guarantee. False positives happen because keys **share bits**: as the array fills, an absent key's k positions are increasingly likely to have all been set by other keys, purely by collision.
+
+Try it below. Insert five or six keys, then query strings you never inserted until you catch a false positive — it happens fastest when the array is small. Then raise `m` and watch the measured false-positive rate collapse, and sweep `k` up from 1 to see the rate dip to a minimum and climb again as too many hashes saturate the array.
+
+<BloomFiltersSim client:visible />
+
+## The false-positive math
+
+After inserting `n` keys with `k` hashes into `m` bits, the probability that any given bit is still 0 is roughly `e^(-kn/m)`. A query for an absent key only lies if all `k` of its probed bits happen to be 1, so the false-positive rate is approximately:
+
+```text
+p ≈ (1 - e^(-kn/m))^k
+```
+
+Two practical consequences:
+
+- **Optimal k** is `(m/n) · ln 2` — about 0.7 times the bits-per-element ratio. At that optimum, roughly half the bits are set, which maximizes the information carried per bit.
+- **Rule of thumb:** about **10 bits per element with k = 7 gives a 1 percent false-positive rate**. Every additional ~4.8 bits per element cuts the rate by another factor of 10.
+
+| Target FP rate | Bits per element | Optimal k | Size for 10M keys |
+| --- | --- | --- | --- |
+| 10% | 4.8 | 3 | 6 MB |
+| 1% | 9.6 | 7 | 12 MB |
+| 0.1% | 14.4 | 10 | 18 MB |
+| 0.01% | 19.2 | 13 | 24 MB |
+
+That last column is the whole pitch. Ten million 32-byte keys stored exactly (a hash set) costs 400+ MB; a bloom filter answers membership for them at 1 percent error in 12 MB — small enough to keep in RAM next to data that lives on disk.
+
+### Tuning intuition
+
+- **m controls the error rate.** More bits means fewer collisions; the rate falls exponentially in bits-per-element. Sizing is about `m/n`, so you must estimate `n` up front — a filter sized for 1M keys at 1 percent that receives 10M saturates almost completely — the false-positive rate climbs past 99 percent and the filter becomes useless.
+- **k trades work for accuracy — up to a point.** Too few hashes and one lucky collision produces a false positive; too many and every insert sets so many bits that the array saturates. The sweet spot keeps about half the bits at 0. In practice most implementations derive all k positions from one or two cheap hash invocations (double hashing), so k = 7 does not mean seven full hash computations.
+
+## Why you cannot delete
+
+Deleting means clearing bits — but a bit you clear was probably also set by *other* keys, and clearing it silently deletes them too. That converts false positives into **false negatives**, destroying the one guarantee the structure offers. So a standard bloom filter is insert-only; the usual reset is to throw the whole filter away and rebuild it, which fits naturally with immutable data (more on that below).
+
+**Counting bloom filters** fix deletion by replacing each bit with a small counter (typically 4 bits): insert increments k counters, delete decrements them, query checks for nonzero. The cost is 4x the memory and a new failure mode — counter overflow — so they are the fallback only when you truly need deletes in place.
+
+## Where bloom filters earn their keep
+
+### LSM storage engines: skipping SSTables
+
+This is the canonical production use. LSM-tree engines — Cassandra, RocksDB, LevelDB, HBase — write data as immutable sorted files (SSTables) on disk. A key can live in any of dozens of these files, so a naive read would probe file after file, and most probes come back empty. Each SSTable therefore carries a bloom filter over its keys, built once when the file is written and held in memory.
+
+The read path: check the memtable, then for each candidate SSTable ask its bloom filter first. "No" means skip the file entirely — zero disk I/O. "Maybe" means do the real lookup (index block, then data block). With a 1 percent filter, a read for a key absent from 20 SSTables does ~0.2 wasted disk reads instead of 20 — and since an SSD read costs ~100 microseconds against nanoseconds for a probe, the filter repays its few megabytes of RAM many thousands of times over. Immutability is what makes this clean: SSTables never change, so the no-deletion limitation costs nothing — when compaction rewrites files, it builds fresh filters.
+
+<Diagram caption="An in-memory bloom filter guards each on-disk SSTable: a certain 'no' skips the disk read entirely.">
+  <svg viewBox="0 0 640 240" width="100%" role="img" aria-label="Read path: a GET request hits a bloom filter in memory. A 'maybe' answer proceeds to search the SSTable on disk; a 'no' answer skips the file with no disk I/O.">
+    <defs>
+      <marker id="bf2-arr-m" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" class="f-muted" />
+      </marker>
+      <marker id="bf2-arr-ok" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" class="f-ok" />
+      </marker>
+    </defs>
+    <rect x="10" y="92" width="120" height="56" rx="8" class="f-inset s-border" />
+    <text x="70" y="124" text-anchor="middle" class="svg-label">GET user:42</text>
+    <line x1="130" y1="120" x2="178" y2="120" class="s-muted" stroke-width="1.5" marker-end="url(#bf2-arr-m)" />
+    <rect x="185" y="92" width="165" height="56" rx="8" class="f-accent-dim s-accent" />
+    <text x="267" y="116" text-anchor="middle" class="svg-label">bloom filter</text>
+    <text x="267" y="136" text-anchor="middle" class="svg-label small muted">in RAM, ~10 bits/key</text>
+    <line x1="350" y1="106" x2="442" y2="66" class="s-muted" stroke-width="1.5" marker-end="url(#bf2-arr-m)" />
+    <text x="392" y="66" text-anchor="middle" class="svg-label small muted">maybe</text>
+    <line x1="350" y1="134" x2="442" y2="174" class="s-ok" stroke-width="1.5" marker-end="url(#bf2-arr-ok)" />
+    <text x="386" y="172" text-anchor="middle" class="svg-label small">no (certain)</text>
+    <rect x="450" y="32" width="175" height="56" rx="8" class="f-inset s-border" />
+    <text x="537" y="56" text-anchor="middle" class="svg-label">search SSTable</text>
+    <text x="537" y="76" text-anchor="middle" class="svg-label small muted">disk read, ~100 µs</text>
+    <rect x="450" y="152" width="175" height="56" rx="8" class="f-inset s-ok" />
+    <text x="537" y="176" text-anchor="middle" class="svg-label">skip this file</text>
+    <text x="537" y="196" text-anchor="middle" class="svg-label small muted">zero disk I/O</text>
+  </svg>
+</Diagram>
+
+### Crawler URL deduplication
+
+A web crawler must not re-fetch pages it has already visited. At a billion URLs, an exact set of URL strings runs to ~80 GB; a bloom filter at 10 bits per URL is ~1.2 GB. The cost: roughly 1 in 100 genuinely *new* URLs is wrongly marked "seen" and never crawled — an acceptable trade for keeping the frontier check in memory.
+
+### CDN admission: filtering one-hit wonders
+
+Akamai found that roughly three-quarters of objects requested at its edge are requested exactly once — "one-hit wonders". Caching them evicts genuinely popular content for zero benefit. The fix: only admit an object into the cache on its *second* request, using a bloom filter to remember "have I seen this URL before". This cut disk writes dramatically and raised hit rates — a nice example where the filter gates writes rather than reads.
+
+## Trade-offs and pitfalls
+
+- **False positives are load, not corruption.** A "maybe" just triggers the real lookup you would have done anyway, which returns the truth. Danger appears only when code treats "maybe" as "definitely yes" — never serve data based on a filter alone.
+- **Sizing requires knowing n.** If cardinality is unbounded or unknown, use scalable bloom filters (chain progressively larger filters) or rebuild on a schedule.
+- **No deletes, no iteration, no counts.** The filter stores no keys — you cannot enumerate members, and you cannot remove them. If your data mutates in place, that is a structural mismatch.
+- **Hash quality matters.** The math assumes independent, uniform hashes; a weak or correlated hash (or sloppy double hashing) quietly multiplies the real error rate over the theoretical one.
+- **Cuckoo filters** are the modern alternative: they store short fingerprints in a cuckoo hash table, support **deletion**, beat bloom filters on space once you want error rates below about 3 percent, and offer better cache locality (two memory locations per query instead of k). Their cost: inserts can fail when the table nears capacity, so they need headroom. RocksDB's newer "ribbon" filters chase the same goal — fewer bits for the same error.
+
+## When to reach for one
+
+Reach for a bloom filter when all three hold: membership checks are hot, most checks are misses, and the ground truth behind the filter is expensive (disk, network, a scan). The filter must guard something that can confirm the answer — it is a gatekeeper, never the source of truth. Budget ~10 bits per expected element for the usual 1 percent target, and plan the rebuild story up front: immutable or periodically rebuilt data fits perfectly; in-place deletes push you toward counting bloom or cuckoo filters. If you need exact answers, enumeration, or per-key values, you want a real index — a bloom filter only ever promises the "no".

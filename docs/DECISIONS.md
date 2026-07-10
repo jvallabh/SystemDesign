@@ -42,7 +42,7 @@ Note: the source list's CDC, Caching, Caching Strategies, Cache Eviction Policie
 - Flat searchable grid — 30 cards + filter
 
 ## 8. Visual design
-- **Dark-first, technical, animated — light-mode toggle, monospace accents, glowing SVG diagrams, subtle motion. All SVGs use CSS variables/currentColor, never hardcoded hex** ✅
+- **Dark-first, technical, animated — light-mode toggle, monospace accents, glowing SVG diagrams, subtle motion. All SVGs theme-aware via CSS classes/currentColor, never hardcoded hex** ✅
 - Clean light editorial — Stripe-docs / textbook feel
 - Playful illustrated — bright, cartoon-style, beginner-friendly
 
@@ -64,6 +64,7 @@ Note: the source list's CDC, Caching, Caching Strategies, Cache Eviction Policie
 ## Implementation conventions
 
 - **No animation libraries.** Sims are SVG + CSS + requestAnimationFrame; tiny bundles are part of the portfolio point.
+- **SVG theming:** presentation attributes cannot use `var()` (`fill="var(--accent)"` silently renders black). Static colors use the utility classes at the bottom of `src/styles/global.css` (`.f-*` fills, `.s-*` strokes, `.svg-label` text) — `className` in `.tsx`, `class` in `.mdx`. Dynamic colors in sims use style objects: `style={{ fill: 'var(--ok)' }}`. `fill="none"` and `fill="currentColor"` are fine as attributes. Never hardcoded hex/named colors.
 - **Sim pattern:** pure module-level step function (testable) + world state in `useRef` + params in `useState` + `useRafLoop` (dt clamped, pauses when hidden, cancels on unmount) + `SimFrame` chrome. See `src/components/sims/SmokeTestSim.tsx` for the reference implementation.
 - **Hydration:** `client:visible` for all sims (they sit mid-article). Never `client:only`.
 - **Base path:** every internal link/asset goes through `withBase()` (`src/utils/url.ts`). Astro does not rewrite hand-written hrefs.

@@ -5,6 +5,147 @@ tier: flagship
 summary: "Cache-aside vs write-through vs write-back, and LRU vs LFU eviction — toggle policies and watch hit rates move."
 order: 1
 sim: CachingSim
-resources: [caching-course]
+resources: [caching-course, caching-strategies-article, caching-patterns-aws]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+import CachingSim from '../../../components/sims/CachingSim';
+
+Every cache is a bet that the recent past predicts the near future: keep a copy of hot data somewhere fast, and accept that the copy can go stale. That trade — freshness for speed and load reduction — is fixed; what you actually get to design are two decisions. The **strategy** decides who keeps the cache and the database in sync. The **eviction policy** decides who gets thrown out when the cache is full. Everything else is tuning.
+
+## Hit ratio is the whole game
+
+The metric that governs a cache is its hit ratio, and the arithmetic is unforgiving. Say a Redis lookup costs 2 ms round trip and the database query it replaces costs 100 ms. At a 99 percent hit ratio, average read latency is 0.99 × 2 + 0.01 × 100 = **2.98 ms**. Drop to 90 percent and it becomes 0.9 × 2 + 0.1 × 100 = **11.8 ms** — losing one nine quadrupled your average latency and sent ten times as much traffic to the database. The last nine is where most of the value lives.
+
+Three levers move the ratio: cache size relative to the working set (once the hot set fits, more memory buys little), TTL length (longer means more hits and more staleness), and access skew. Skew is why caching works at all — real traffic is roughly Zipfian, a few percent of keys serving most reads, so a cache far smaller than the dataset can still hit 95 percent.
+
+## Read and write strategies
+
+### Cache-aside (lazy loading)
+
+The application owns everything. On a read it checks the cache first; on a miss it queries the database and writes the result into the cache with a TTL. On a write it updates the database and then deletes the cache key, so the next read repopulates it fresh.
+
+<Diagram caption="Cache-aside read path on a miss: the app checks the cache, falls back to the database, then populates the cache so the next read is a hit.">
+  <svg viewBox="0 0 640 260" width="100%" role="img" aria-label="Cache-aside flow: app server checks cache, gets a miss, reads from the database, then sets the value in the cache">
+    <defs>
+      <marker id="m-ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="40" y="100" width="130" height="56" rx="8" class="f-inset s-border" />
+    <text x="105" y="132" text-anchor="middle" class="svg-label">app server</text>
+    <rect x="430" y="24" width="160" height="56" rx="8" class="f-inset s-accent" />
+    <text x="510" y="56" text-anchor="middle" class="svg-label">cache (Redis)</text>
+    <rect x="430" y="180" width="160" height="56" rx="8" class="f-inset s-border" />
+    <text x="510" y="212" text-anchor="middle" class="svg-label">database</text>
+    <line x1="175" y1="112" x2="424" y2="54" class="s-muted" stroke-width="1.5" marker-end="url(#m-ca)" />
+    <text x="270" y="70" text-anchor="middle" class="svg-label small">1 get(key) — miss</text>
+    <line x1="175" y1="138" x2="450" y2="86" class="s-muted" stroke-width="1.5" marker-end="url(#m-ca)" />
+    <text x="300" y="140" text-anchor="middle" class="svg-label small">3 set(key, val)</text>
+    <line x1="175" y1="152" x2="424" y2="196" class="s-muted" stroke-width="1.5" marker-end="url(#m-ca)" />
+    <text x="280" y="192" text-anchor="middle" class="svg-label small">2 read from DB</text>
+  </svg>
+</Diagram>
+
+Cache-aside is the default because it needs nothing from the cache beyond `get` and `set`, degrades gracefully (cache down means slow, not broken), and only caches what is actually read. Its failure modes are equally standard: a lost invalidation leaves a key stale until the TTL saves you, a deploy starts with a cold cache, and a concurrent read-miss racing a write can repopulate the key with the old value.
+
+### Read-through
+
+Same data flow, different owner: the cache layer itself loads from the database on a miss, via a loader you register (Caffeine's `LoadingCache`, or DynamoDB's DAX as a managed example). Application code shrinks to a plain `get`, and the loader is a natural place to build in request coalescing.
+
+### Write-through
+
+Writes go through the cache and synchronously on to the database; the write acks only after both commit. The cache is always warm and never stale for written keys, at the cost of slower writes and cached data nobody may ever read. It pairs naturally with read-through.
+
+### Write-behind (write-back)
+
+Write to the cache, ack immediately, flush to the database asynchronously — often batched, with repeated writes to the same key coalesced. Writes become memory-speed and bursts get absorbed, but there is a **loss window**: acknowledged writes queued in the cache die with the cache node unless it is replicated or backed by a durable log. This is not exotic — your database's own buffer pool does exactly this, made safe by a write-ahead log.
+
+<Diagram caption="Write-through acks after both writes commit; write-behind acks first and flushes later, opening a loss window.">
+  <svg viewBox="0 0 640 305" width="100%" role="img" aria-label="Comparison of write-through, where the ack waits for the database, and write-behind, where the ack precedes an asynchronous flush">
+    <defs>
+      <marker id="m-wt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+      <marker id="m-wb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-danger" />
+      </marker>
+    </defs>
+    <text x="20" y="36" class="svg-label">Write-through</text>
+    <rect x="20" y="50" width="110" height="48" rx="8" class="f-inset s-border" />
+    <text x="75" y="79" text-anchor="middle" class="svg-label small">app</text>
+    <rect x="265" y="50" width="110" height="48" rx="8" class="f-inset s-accent" />
+    <text x="320" y="79" text-anchor="middle" class="svg-label small">cache</text>
+    <rect x="510" y="50" width="110" height="48" rx="8" class="f-inset s-border" />
+    <text x="565" y="79" text-anchor="middle" class="svg-label small">database</text>
+    <line x1="135" y1="64" x2="258" y2="64" class="s-muted" stroke-width="1.5" marker-end="url(#m-wt)" />
+    <text x="197" y="58" text-anchor="middle" class="svg-label small">1 write</text>
+    <line x1="380" y1="64" x2="503" y2="64" class="s-muted" stroke-width="1.5" marker-end="url(#m-wt)" />
+    <text x="442" y="58" text-anchor="middle" class="svg-label small">2 write (sync)</text>
+    <line x1="505" y1="88" x2="385" y2="88" class="s-muted" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#m-wt)" />
+    <text x="445" y="106" text-anchor="middle" class="svg-label small muted">3 ack</text>
+    <line x1="260" y1="88" x2="140" y2="88" class="s-muted" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#m-wt)" />
+    <text x="200" y="106" text-anchor="middle" class="svg-label small muted">4 ack</text>
+    <text x="320" y="136" text-anchor="middle" class="svg-label small muted">caller waits for both writes — slower, never stale</text>
+    <text x="20" y="186" class="svg-label">Write-behind</text>
+    <rect x="20" y="200" width="110" height="48" rx="8" class="f-inset s-border" />
+    <text x="75" y="229" text-anchor="middle" class="svg-label small">app</text>
+    <rect x="265" y="200" width="110" height="48" rx="8" class="f-inset s-accent" />
+    <text x="320" y="229" text-anchor="middle" class="svg-label small">cache</text>
+    <rect x="510" y="200" width="110" height="48" rx="8" class="f-inset s-border" />
+    <text x="565" y="229" text-anchor="middle" class="svg-label small">database</text>
+    <line x1="135" y1="214" x2="258" y2="214" class="s-muted" stroke-width="1.5" marker-end="url(#m-wt)" />
+    <text x="197" y="208" text-anchor="middle" class="svg-label small">1 write</text>
+    <line x1="260" y1="238" x2="140" y2="238" class="s-muted" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#m-wt)" />
+    <text x="200" y="258" text-anchor="middle" class="svg-label small muted">2 ack now</text>
+    <line x1="380" y1="214" x2="503" y2="214" class="s-danger" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#m-wb)" />
+    <text x="442" y="208" text-anchor="middle" class="svg-label small">3 async flush</text>
+    <text x="320" y="290" text-anchor="middle" class="svg-label small muted">ack before the DB write — fast, but queued writes die with the cache</text>
+  </svg>
+</Diagram>
+
+### Write-around
+
+Writes go straight to the database and skip the cache (at most invalidating the old entry); reads stay cache-aside. This keeps write-once, read-rarely data — logs, bulk imports — from evicting keys that are actually hot.
+
+| Strategy | Read miss | Write path | Main risk | Reach for it when |
+| --- | --- | --- | --- | --- |
+| Cache-aside | App loads DB, populates cache | DB write, then cache delete | Staleness between write and invalidation | Default; read-heavy, general purpose |
+| Read-through | Cache loads DB itself | Paired with a write strategy | Same as cache-aside, minus app boilerplate | You want loading logic centralized |
+| Write-through | Rare — cache stays warm | Cache and DB, synchronous | Slow writes; caching never-read data | Reads must see writes immediately |
+| Write-behind | Rare — cache stays warm | Cache now, DB async | Data loss in the flush window | Write-heavy, burst-prone, loss-tolerant |
+| Write-around | App loads DB, populates cache | DB only, bypass cache | First read after write always misses | Written data is rarely read back |
+
+## Eviction: deciding who dies
+
+A full cache must evict on every insert, and the policy is a prediction about future accesses.
+
+**LRU** evicts the least recently used key: "if you were touched recently, you will be touched again." It is the default nearly everywhere and it is right most of the time. Its weakness is **scan pollution**: one batch job or crawler that touches a million keys exactly once marks each of them "recently used" and flushes your entire hot set out the back.
+
+**LFU** evicts the least frequently used key, so a one-time scan cannot displace a key with thousands of historical hits. The cost is inertia: yesterday's hot key carries a fat counter and squats in the cache long after traffic moves on, which is why practical LFU decays counts over time. Caffeine's W-TinyLFU (used inside Cassandra) is the modern refinement — frequency sketches plus a small recency window.
+
+**FIFO** evicts the oldest insert regardless of use — cheap, and nearly as good as LRU when access is uniform. **TTL** is expiry rather than pressure-driven eviction: entries define their own staleness budget. **Random** eviction is surprisingly competitive under heavy skew, because a random victim is probably a cold key anyway.
+
+That last observation is why **Redis uses approximate LRU**: instead of an exact global recency list (extra pointers per key, bookkeeping on every read), it samples five random keys and evicts the stalest of the sample — close to exact LRU at a fraction of the memory and CPU. `allkeys-lfu` applies the same sampling trick with logarithmic, decaying counters.
+
+## Watch it happen
+
+The simulator below runs a live key stream against a small cache, with a scan burst of one-off keys rolling through periodically. Three experiments worth running: watch a scan flush the hot keys out of an LRU cache, then switch to LFU — the next burst bounces off. Shrink the cache until the working set no longer fits and watch the hit rate fall off a cliff rather than degrade linearly. Then switch to write-behind and keep an eye on the dirty-pending readout: every write it counts is acknowledged but not yet in the database — that is the loss window, live.
+
+<CachingSim client:visible />
+
+## The hard parts
+
+**Invalidation.** TTL is the bluntest tool: staleness is bounded but guaranteed, and you tune one number. Explicit invalidation (delete-on-write, as in cache-aside) is precise but demands that every write path knows every cache key derived from the data — miss one and it stays wrong until something else expires it. Change-driven invalidation subscribes to the database's own change stream; the plumbing for that is Change Data Capture's territory. Whatever you choose, keep a TTL as a backstop — it converts every bug from "stale forever" into "stale for five minutes."
+
+**Stampedes.** A popular key expires, and every request for the next 100 ms misses and issues the same database query — ten thousand concurrent rebuilds of one value can take the database down, which takes the cache down harder. Defenses: a per-key lock so one request rebuilds while the rest wait or serve the stale copy; request coalescing so identical in-flight loads share one fetch; and probabilistic early expiry, where each request recomputes early with a probability that rises as the deadline nears, smearing refreshes out instead of synchronizing them.
+
+**Hot keys.** Skew helps hit ratio but hurts at the extreme: one celebrity key can draw enough traffic to saturate the single cache node that owns it (which node that is belongs to Consistent Hashing). Mitigations are a tiny in-process cache in front of the shared one — even a 1-second local TTL absorbs most of the flood — or replicating the key under several suffixes and spreading reads across them.
+
+## Layers all the way down
+
+App-level caching is one floor of a taller building. A read may be served by the browser's HTTP cache, a CDN edge node (a topic of its own), a reverse proxy or API gateway cache, the Redis tier this article describes, and finally the database's buffer pool holding hot pages in RAM. Each layer sits closer to the user and is harder to invalidate. When debugging staleness, find which layer served the stale byte before touching code — it is often not the one you own.
+
+## Choosing
+
+Start with cache-aside, a TTL sized to your staleness budget, and LRU — that combination is right often enough that deviating needs a reason. Move to read/write-through when you want loading centralized or reads must immediately see writes. Take write-behind only when you can state the loss window out loud and nobody flinches; use write-around when writes rarely get read back. Switch to LFU when scans measurably pollute the cache. And when the hit ratio disappoints, check cache size against the working set before blaming the eviction policy — the policy is rarely the bottleneck; the bet on skew is.
