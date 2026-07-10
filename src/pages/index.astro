@@ -1,0 +1,66 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import CategoryCard from '../components/CategoryCard.astro';
+import { CATEGORIES } from '../data/categories';
+import { withBase } from '../utils/url';
+
+const topics = await getCollection('topics', ({ data }) => !data.draft);
+
+const cards = CATEGORIES.map((cat) => {
+  const catTopics = topics.filter((t) => t.data.category === cat.slug);
+  const first = [...catTopics].sort((a, b) => a.data.order - b.data.order)[0];
+  return {
+    category: cat,
+    topicCount: catTopics.length,
+    simCount: catTopics.filter((t) => t.data.tier === 'flagship').length,
+    href: first ? withBase(`/topics/${first.id}/`) : withBase('/'),
+  };
+});
+
+const simTotal = topics.filter((t) => t.data.tier === 'flagship').length;
+---
+
+<BaseLayout title="Home">
+  <section class="hero">
+    <h1>System Design <span class="accent">Atlas</span></h1>
+    <p>
+      A visual map of the concepts behind large-scale systems — {topics.length} topics with
+      original explanations, diagrams, and {simTotal} interactive simulations you can poke at.
+    </p>
+  </section>
+  <section class="grid">
+    {cards.map((c) => <CategoryCard {...c} />)}
+  </section>
+</BaseLayout>
+
+<style>
+  .hero {
+    max-width: 40rem;
+    margin: 2rem auto 3rem;
+    text-align: center;
+  }
+
+  h1 {
+    font-size: 2.6rem;
+    margin: 0 0 0.75rem;
+  }
+
+  .accent {
+    color: var(--accent);
+    filter: var(--glow);
+  }
+
+  .hero p {
+    color: var(--text-muted);
+    font-size: 1.1rem;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+    max-width: 62rem;
+    margin: 0 auto;
+  }
+</style>

@@ -1,0 +1,120 @@
+---
+import { getCollection } from 'astro:content';
+import { CATEGORIES } from '../data/categories';
+import { withBase } from '../utils/url';
+
+const topics = (await getCollection('topics', ({ data }) => !data.draft)).sort(
+  (a, b) => a.data.order - b.data.order || a.data.title.localeCompare(b.data.title)
+);
+
+const currentPath = Astro.url.pathname.replace(/\/$/, '');
+
+const groups = CATEGORIES.map((cat) => ({
+  ...cat,
+  topics: topics.filter((t) => t.data.category === cat.slug),
+}));
+---
+
+<nav aria-label="Topics">
+  <a class="site-title" href={withBase('/')}>
+    <span class="logo" aria-hidden="true">◈</span>
+    System Design Atlas
+  </a>
+  {
+    groups.map((group) => (
+      <section>
+        <h2>{group.title}</h2>
+        <ul>
+          {group.topics.map((topic) => {
+            const href = withBase(`/topics/${topic.id}/`);
+            const active = currentPath === href.replace(/\/$/, '');
+            return (
+              <li>
+                <a href={href} aria-current={active ? 'page' : undefined} class:list={{ active }}>
+                  {topic.data.title}
+                  {topic.data.tier === 'flagship' && <span class="badge" title="Interactive simulation">sim</span>}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    ))
+  }
+</nav>
+
+<style>
+  nav {
+    padding: 1.25rem 1rem 2rem;
+    font-size: 0.875rem;
+  }
+
+  .site-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--text);
+    margin-bottom: 1.25rem;
+  }
+
+  .site-title:hover {
+    text-decoration: none;
+    color: var(--accent);
+  }
+
+  .logo {
+    color: var(--accent);
+    filter: var(--glow);
+  }
+
+  h2 {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin: 1.25rem 0 0.4rem;
+  }
+
+  ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  li a {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--text-muted);
+    padding: 0.3rem 0.5rem;
+    border-radius: 6px;
+    border-left: 2px solid transparent;
+  }
+
+  li a:hover {
+    color: var(--text);
+    background: var(--bg-raised);
+    text-decoration: none;
+  }
+
+  li a.active {
+    color: var(--accent);
+    background: var(--accent-dim);
+    border-left-color: var(--accent);
+  }
+
+  .badge {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    line-height: 1;
+    color: var(--accent-2);
+    border: 1px solid var(--accent-2);
+    border-radius: 999px;
+    padding: 0.15em 0.5em;
+  }
+</style>

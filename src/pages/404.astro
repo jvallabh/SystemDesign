@@ -1,0 +1,19 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { withBase } from '../utils/url';
+---
+
+<BaseLayout title="Not found">
+  <section>
+    <h1><code>404</code> — off the map</h1>
+    <p>This page doesn't exist. Head back to the <a href={withBase('/')}>Atlas</a>.</p>
+  </section>
+</BaseLayout>
+
+<style>
+  section {
+    max-width: 40rem;
+    margin: 4rem auto;
+    text-align: center;
+  }
+</style>

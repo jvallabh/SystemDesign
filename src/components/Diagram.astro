@@ -1,0 +1,41 @@
+---
+interface Props {
+  caption?: string;
+}
+
+const { caption } = Astro.props;
+---
+
+<figure>
+  <div class="canvas">
+    <slot />
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<style>
+  figure {
+    margin: 2rem 0;
+  }
+
+  .canvas {
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    display: flex;
+    justify-content: center;
+    color: var(--accent);
+  }
+
+  .canvas :global(svg) {
+    filter: var(--glow);
+  }
+
+  figcaption {
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.6rem;
+  }
+</style>

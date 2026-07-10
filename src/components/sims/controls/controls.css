@@ -1,0 +1,103 @@
+.sim-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.sim-control-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sim-control-label output {
+  color: var(--accent);
+}
+
+.sim-slider input[type='range'] {
+  accent-color: var(--accent);
+  width: 100%;
+  margin: 0;
+}
+
+.sim-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sim-toggle input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.sim-segments {
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.sim-segments button {
+  flex: 1;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  padding: 0.35rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sim-segments button + button {
+  border-left: 1px solid var(--border);
+}
+
+.sim-segments button.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.sim-button {
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.sim-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sim-readout {
+  display: flex;
+  flex-direction: column;
+  min-width: 5.5rem;
+}
+
+.sim-readout-value {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  color: var(--accent);
+}
+
+.sim-readout-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}

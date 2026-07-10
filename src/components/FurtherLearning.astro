@@ -1,0 +1,64 @@
+---
+import resources from '../data/resources.json';
+
+interface Props {
+  keys: string[];
+}
+
+const { keys } = Astro.props;
+
+const links = keys.map((key) => {
+  const entry = (resources as Record<string, { title: string; url: string }>)[key];
+  if (!entry) throw new Error(`Unknown resource key "${key}" — add it to src/data/resources.json`);
+  return entry;
+});
+---
+
+{
+  links.length > 0 && (
+    <section class="further-learning">
+      <h2>Further learning</h2>
+      <ul>
+        {links.map((link) => (
+          <li>
+            <a href={link.url} target="_blank" rel="noopener noreferrer">
+              {link.title}
+              <span aria-hidden="true">↗</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+<style>
+  section {
+    margin-top: 3rem;
+    border-top: 1px solid var(--border);
+    padding-top: 1.5rem;
+  }
+
+  h2 {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+
+  ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  a span {
+    font-size: 0.8em;
+    margin-left: 0.3em;
+    color: var(--text-muted);
+  }
+</style>

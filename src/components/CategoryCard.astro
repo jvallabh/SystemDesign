@@ -1,0 +1,66 @@
+---
+import type { Category } from '../data/categories';
+
+interface Props {
+  category: Category;
+  topicCount: number;
+  simCount: number;
+  href: string;
+}
+
+const { category, topicCount, simCount, href } = Astro.props;
+---
+
+<a class="card" href={href}>
+  <h2>{category.title}</h2>
+  <p>{category.description}</p>
+  <footer>
+    <span>{topicCount} topics</span>
+    {simCount > 0 && <span class="sims">{simCount} interactive</span>}
+  </footer>
+</a>
+
+<style>
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.4rem;
+    color: var(--text);
+    box-shadow: var(--shadow-card);
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+
+  .card:hover {
+    text-decoration: none;
+    border-color: var(--accent);
+    transform: translateY(-2px);
+  }
+
+  h2 {
+    font-size: 1.05rem;
+    margin: 0;
+  }
+
+  p {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    flex: 1;
+  }
+
+  footer {
+    display: flex;
+    gap: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+
+  .sims {
+    color: var(--accent-2);
+  }
+</style>
