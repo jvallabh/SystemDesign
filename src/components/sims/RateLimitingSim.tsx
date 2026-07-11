@@ -160,11 +160,16 @@ function stepWorld(w: World, dtMs: number, p: Params) {
   // (no banking), which is what makes the output steady.
   if (p.algorithm === 'leaky') {
     w.leakAcc += p.sustainedRate * dtS;
+    let leakI = 0;
     while (w.leakAcc >= 1) {
       w.leakAcc -= 1;
-      if (w.queueDepth > 0 && w.dots.length < MAX_DOTS) {
+      if (w.queueDepth > 0) {
         w.queueDepth--;
-        w.dots.push({ id: w.nextId++, x: GATE_OUT_X, y: LANE_IN_Y, phase: 'ok' });
+        if (w.dots.length < MAX_DOTS) {
+          // Space same-frame emissions so they don't render stacked.
+          w.dots.push({ id: w.nextId++, x: GATE_OUT_X - leakI * 12, y: LANE_IN_Y, phase: 'ok' });
+          leakI++;
+        }
       }
     }
   } else {
@@ -214,6 +219,13 @@ export default function RateLimitingSim() {
   }, playing);
 
   const w = world.current;
+
+  const changeAlgorithm = (v: Algorithm) => {
+    setAlgorithm(v);
+    // The rolling accepted-% sample is per-algorithm; carrying ~100 decisions
+    // from the previous algorithm misreports the new one for many seconds.
+    world.current.decisions = [];
+  };
 
   const changeCapacity = (v: number) => {
     setCapacity(v);
@@ -358,7 +370,7 @@ export default function RateLimitingSim() {
           <SegmentedControl<Algorithm>
             label="Algorithm"
             value={algorithm}
-            onChange={setAlgorithm}
+            onChange={changeAlgorithm}
             options={[
               { value: 'token', label: 'Token bucket' },
               { value: 'leaky', label: 'Leaky bucket' },

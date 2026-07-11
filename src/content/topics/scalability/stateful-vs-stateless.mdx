@@ -6,4 +6,128 @@ summary: "Why stateless services scale trivially and where the state you can't e
 order: 6
 resources: [stateful-stateless-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+When one server can no longer handle the load, you add more. Whether that is a routine Tuesday or a migration project depends on a single design decision: does each server remember anything about its clients between requests? That one property — statelessness — is what separates services that scale by changing a number in an autoscaling policy from services that scale by scheduling a maintenance window.
+
+## What "stateless" actually means
+
+A stateless service keeps no per-client state on the instance between requests: no session objects in process memory, no uploaded files on local disk, nothing that makes request N+1 depend on which machine handled request N. Every request carries, or references by ID, everything needed to process it.
+
+This is a narrower claim than it sounds. A stateless service still reads and writes a database on nearly every request. Statelessness is not about eliminating state; it is about where state lives. Durable and session state move out of the instance and into systems built to hold them, and the instances become interchangeable. This is factor VI of the twelve-factor app methodology: execute the app as one or more stateless processes, with anything worth keeping in a backing service.
+
+## Why interchangeable instances make operations trivial
+
+Three pieces of scaling machinery all depend on the same property — any instance can serve any request:
+
+- **Load balancing.** The load balancer can use plain round-robin or least-connections with no pinning logic. Load spreads evenly because nothing ties a client to a machine.
+- **Autoscaling.** A new instance is fully useful the moment its health check passes — it needs no warm-up of client data. Terminating an instance loses nothing. Scaling from 4 to 40 instances during a traffic spike, and back down overnight, is a policy setting.
+- **Deploys.** A rolling deploy is drain, kill, replace. Draining means waiting seconds for in-flight requests to finish — not hours for resident sessions to expire.
+
+With in-memory client state, each of these becomes a data-migration problem: the load balancer must route carefully, the autoscaler must not kill the wrong box, and every deploy risks logging users out.
+
+<Diagram caption="Stateless topology: any instance serves any request; per-client state lives in shared backing services.">
+  <svg viewBox="0 0 640 350" width="100%" role="img" aria-label="A client sends requests through a load balancer to any of three interchangeable instances, all of which read and write a shared Redis and database layer.">
+    <defs>
+      <marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="250" y="10" width="140" height="44" rx="8" class="f-inset s-border" />
+    <text x="320" y="37" text-anchor="middle" class="svg-label">client</text>
+    <line x1="320" y1="54" x2="320" y2="86" class="s-muted" marker-end="url(#arrow1)" />
+    <rect x="250" y="90" width="140" height="44" rx="8" class="f-inset s-accent" />
+    <text x="320" y="117" text-anchor="middle" class="svg-label">load balancer</text>
+    <line x1="290" y1="134" x2="140" y2="176" class="s-muted" marker-end="url(#arrow1)" />
+    <line x1="320" y1="134" x2="320" y2="148" class="s-muted" />
+    <line x1="320" y1="167" x2="320" y2="176" class="s-muted" marker-end="url(#arrow1)" />
+    <line x1="350" y1="134" x2="500" y2="176" class="s-muted" marker-end="url(#arrow1)" />
+    <text x="320" y="162" text-anchor="middle" class="svg-label small muted">any instance, any request</text>
+    <rect x="60" y="180" width="140" height="44" rx="8" class="f-inset s-border" />
+    <text x="130" y="207" text-anchor="middle" class="svg-label">instance A</text>
+    <rect x="250" y="180" width="140" height="44" rx="8" class="f-inset s-border" />
+    <text x="320" y="207" text-anchor="middle" class="svg-label">instance B</text>
+    <rect x="440" y="180" width="140" height="44" rx="8" class="f-inset s-border" />
+    <text x="510" y="207" text-anchor="middle" class="svg-label">instance C</text>
+    <line x1="130" y1="224" x2="270" y2="286" class="s-muted" marker-end="url(#arrow1)" />
+    <line x1="320" y1="224" x2="320" y2="286" class="s-muted" marker-end="url(#arrow1)" />
+    <line x1="510" y1="224" x2="370" y2="286" class="s-muted" marker-end="url(#arrow1)" />
+    <rect x="180" y="290" width="280" height="44" rx="8" class="f-inset s-accent-2" />
+    <text x="320" y="317" text-anchor="middle" class="svg-label">shared state: Redis + DB</text>
+  </svg>
+</Diagram>
+
+## Where the state you cannot eliminate goes
+
+Session state has to live somewhere. There are exactly three homes:
+
+1. **The client.** Put session data in a signed token or cookie the client sends with every request. The server verifies the signature and trusts the contents — zero lookups. The costs are size (cookies cap around 4KB) and revocation (you cannot un-issue a token before it expires).
+2. **A shared cache.** Keep only a random session ID in the cookie and store the session in Redis or Memcached. Any instance resolves it with a same-zone round trip of roughly 0.5ms.
+3. **The database.** Anything that must survive a cache flush — carts worth money, user preferences, drafts — belongs in durable storage, not a session at all.
+
+The token-vs-store choice comes up constantly. A JWT trades a store lookup for a signature check and pushes state to the client, which is attractive when many services must verify identity without sharing a database — and painful the moment you need instant logout or per-user bans. A server-side session store costs one sub-millisecond Redis read per request and makes revocation a single DELETE. Most systems that already run Redis pick the store; token mechanics are covered in depth in the JWTs topic.
+
+## Sticky sessions: the halfway hack
+
+Load balancers offer a shortcut: hash the client (by cookie or IP) to the same instance every time, and in-memory sessions keep working. It feels free. It is not:
+
+| Cost | Why it happens |
+| --- | --- |
+| Uneven load | Clients are pinned, so a hot instance cannot shed traffic; a few heavy users can saturate one box while others idle |
+| Painful drains | Deploys must wait for pinned sessions to expire — often hours — or forcibly log users out |
+| Failover data loss | When an instance dies, every cart, login, and wizard-in-progress it held dies with it |
+| Autoscaling half-works | New instances receive only new clients; existing load never rebalances onto them |
+
+<Diagram caption="Sticky sessions pin clients to instances; when a pinned instance dies, its in-memory sessions are gone.">
+  <svg viewBox="0 0 640 250" width="100%" role="img" aria-label="Two clients are pinned by the load balancer to specific instances; instance B fails and client 2's session data is lost.">
+    <defs>
+      <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+      <marker id="arrow2d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-danger" />
+      </marker>
+    </defs>
+    <rect x="20" y="40" width="110" height="44" rx="8" class="f-inset s-border" />
+    <text x="75" y="67" text-anchor="middle" class="svg-label">client 1</text>
+    <rect x="20" y="160" width="110" height="44" rx="8" class="f-inset s-border" />
+    <text x="75" y="187" text-anchor="middle" class="svg-label">client 2</text>
+    <line x1="130" y1="62" x2="216" y2="106" class="s-muted" marker-end="url(#arrow2)" />
+    <line x1="130" y1="182" x2="216" y2="138" class="s-muted" marker-end="url(#arrow2)" />
+    <rect x="220" y="100" width="140" height="44" rx="8" class="f-inset s-accent" />
+    <text x="290" y="127" text-anchor="middle" class="svg-label">load balancer</text>
+    <line x1="360" y1="112" x2="446" y2="66" class="s-muted" marker-end="url(#arrow2)" />
+    <line x1="360" y1="132" x2="446" y2="178" class="s-danger" stroke-dasharray="6 4" marker-end="url(#arrow2d)" />
+    <rect x="450" y="30" width="170" height="56" rx="8" class="f-inset s-border" />
+    <text x="535" y="53" text-anchor="middle" class="svg-label">instance A</text>
+    <text x="535" y="73" text-anchor="middle" class="svg-label small muted">holds client 1 session</text>
+    <rect x="450" y="150" width="170" height="56" rx="8" class="f-inset s-danger" />
+    <text x="535" y="173" text-anchor="middle" class="svg-label">instance B (dies)</text>
+    <text x="535" y="193" text-anchor="middle" class="svg-label small muted">client 2 session lost</text>
+    <text x="535" y="232" text-anchor="middle" class="svg-label small muted">no instance can take over</text>
+  </svg>
+</Diagram>
+
+Sticky sessions are a defensible bridge while migrating a legacy app that assumes local sessions. As a deliberate design, they trade every operational property above for saving one Redis lookup.
+
+## Genuinely stateful workloads
+
+Some systems cannot externalize their state, and pretending otherwise makes them worse. Each has a named pattern instead:
+
+- **WebSocket servers.** The TCP connection itself is state pinned to one instance — you cannot move a socket to another machine. The pattern is a **connection registry**: a shared map (often Redis) from user to the instance holding their socket, or a pub/sub channel every instance subscribes to, so any node can deliver a message to whichever node owns the connection. Connection lifecycle details belong to the Long Polling vs WebSockets topic.
+- **Multiplayer game servers.** An authoritative world simulating 30 to 60 ticks per second cannot put its state across a network hop — a 0.5ms Redis read per entity per tick is a non-starter. The pattern is **partitioned ownership**: each match or map region is owned by exactly one process, a matchmaker routes players to their owner, and the owner periodically snapshots to durable storage.
+- **Databases.** Holding state is the whole job. The pattern is **replication with orchestrated failover** — Postgres under Patroni, Redis under Sentinel — where leader election and replica promotion are carefully sequenced and failover is measured in seconds, not milliseconds.
+
+The meta-pattern: when state must live in-process, make its ownership explicit and build machinery to relocate or recover it. That machinery is exactly what stateless services get for free.
+
+## Trade-offs and pitfalls
+
+- **Externalization is not free.** Every request pays a tax — a Redis hop or token signature check. Against a typical 50–200ms request budget it is noise; at very high request rates or in tick loops it is the whole budget.
+- **You moved the state, you didn't delete it.** Redis is now a single point of failure and needs its own replication and failover story.
+- **Hidden state creeps back in.** Per-user data in a local in-process cache, temp files between requests, in-memory rate-limit counters, stickiness "just for file uploads." The litmus test: kill any instance under live traffic. If any user notices more than one retried request, the service is not stateless.
+- **Chatty session access.** Hitting the session store several times per request turns your cache into a hotspot. Read once; write only on change.
+
+## When to reach for it
+
+Stateless is the default for request/response services — web APIs, workers, anything behind a load balancer. Choose it unless you can name the specific state that must live in-process and the pattern (registry, partitioned ownership, orchestrated failover) you will use to manage it. Accept sticky sessions only as a dated bridge with a removal plan. Do the split early: retrofitting statelessness into a service that has grown local state costs far more than starting with sessions in Redis on day one. How stateless services combine with replication and partitioning is the broader Scaling topic's story.

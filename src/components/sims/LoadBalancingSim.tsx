@@ -101,9 +101,33 @@ function serverSlot(i: number, n: number) {
 
 /** Grow or shrink the server pool in place; ids are stable indexes. */
 function reconcileServers(w: World, n: number) {
+  if (w.servers.length === n) return;
   while (w.servers.length < n) w.servers.push(makeServer(w.servers.length));
-  if (w.servers.length > n) w.servers.length = n;
+  if (w.servers.length > n) {
+    for (let i = n; i < w.servers.length; i++) w.dropped += w.servers[i]?.queue.length ?? 0;
+    w.servers.length = n;
+  }
   if (w.rrIndex >= n) w.rrIndex = -1;
+  // Slot geometry changed: re-aim in-flight dots at their target's new center.
+  for (const d of w.dots) {
+    if (d.phase === 'toServer' && d.targetId >= 0 && d.targetId < n) {
+      d.toY = serverSlot(d.targetId, n).cy;
+    }
+  }
+}
+
+/**
+ * Requests assigned to a server and not yet completed: queued plus dots
+ * still flying toward it. Routing on queue length alone herds bursts onto
+ * one server, because the balancer→server flight delay hides decisions
+ * already made.
+ */
+function loadOf(w: World, s: Server): number {
+  let n = s.queue.length;
+  for (const d of w.dots) {
+    if (d.phase === 'toServer' && d.targetId === s.id && d.elapsedMs < d.durationMs) n++;
+  }
+  return n;
 }
 
 function pushFade(w: World, x: number, y: number, kind: Fade['kind']) {
@@ -129,15 +153,26 @@ function pickServer(w: World, strategy: Strategy): Server | null {
     }
     case 'lc': {
       let best = alive[0] as Server;
-      for (const s of alive) if (s.queue.length < best.queue.length) best = s;
+      let bestLoad = loadOf(w, best);
+      for (const s of alive) {
+        const load = loadOf(w, s);
+        if (load < bestLoad) {
+          best = s;
+          bestLoad = load;
+        }
+      }
       return best;
     }
     case 'rand':
       return alive[Math.floor(Math.random() * alive.length)] as Server;
     case 'p2c': {
-      const a = alive[Math.floor(Math.random() * alive.length)] as Server;
-      const b = alive[Math.floor(Math.random() * alive.length)] as Server;
-      return a.queue.length <= b.queue.length ? a : b;
+      if (alive.length === 1) return alive[0] as Server;
+      const i = Math.floor(Math.random() * alive.length);
+      let j = Math.floor(Math.random() * (alive.length - 1));
+      if (j >= i) j++;
+      const a = alive[i] as Server;
+      const b = alive[j] as Server;
+      return loadOf(w, a) <= loadOf(w, b) ? a : b;
     }
   }
 }
@@ -256,9 +291,9 @@ function stepWorld(
 
 const STRATEGY_OPTIONS: { value: Strategy; label: string }[] = [
   { value: 'rr', label: 'Round robin' },
-  { value: 'lc', label: 'Least conn' },
+  { value: 'lc', label: 'Least connections' },
   { value: 'rand', label: 'Random' },
-  { value: 'p2c', label: '2 choices' },
+  { value: 'p2c', label: '2 random choices' },
 ];
 
 /**
@@ -299,7 +334,7 @@ export default function LoadBalancingSim() {
   const throughput = w.completions.length / (tputWindow / 1000);
   const avgWait =
     w.waits.length > 0 ? w.waits.reduce((sum, s) => sum + s.wait, 0) / w.waits.length : 0;
-  const aliveLoads = w.servers.filter((s) => s.alive).map((s) => s.queue.length);
+  const aliveLoads = w.servers.filter((s) => s.alive).map((s) => loadOf(w, s));
   let imbalance = '—';
   if (aliveLoads.length >= 2) {
     const max = Math.max(...aliveLoads);

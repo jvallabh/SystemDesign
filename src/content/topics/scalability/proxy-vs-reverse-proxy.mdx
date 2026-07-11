@@ -6,4 +6,132 @@ summary: "Same idea, opposite direction: who is hidden — the client or the ser
 order: 5
 resources: [proxy-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+A proxy is a machine that accepts a connection, opens a second connection on the other side, and shuttles bytes between them. Mechanically, a forward proxy and a reverse proxy are the same thing — often literally the same binary. What differs is allegiance: which side of the conversation the proxy works for, and therefore which side gets hidden from the other. Get that one distinction straight and everything else about proxies falls into place.
+
+## One mechanism, two allegiances
+
+Ask two questions about any intermediary: **who configured it**, and **who can no longer see whom**?
+
+A **forward proxy** is deployed and configured by the client side. The client knows the proxy exists (its OS, browser, or network is pointed at it); the server does not. From the server's perspective, every request arrives from the proxy's IP — the real client is invisible.
+
+A **reverse proxy** is deployed and configured by the server side. The client has no idea it exists — it just resolves a hostname and connects to what it believes is "the server." Behind that public face may be one machine or five hundred; the client can't tell.
+
+| | Forward proxy | Reverse proxy |
+|---|---|---|
+| Works for | The client | The server |
+| Configured by | Client, or client's network admin | Service operator |
+| Hidden party | Clients (server sees proxy IP) | Servers (client sees proxy IP) |
+| Sits | At the edge of the client's network | In front of the server fleet |
+| Canonical jobs | Egress control, filtering, anonymity, org caching | TLS termination, load balancing, caching, WAF |
+| Examples | Squid, corporate egress proxies, Tor | nginx, HAProxy, Envoy, CDN edges |
+
+## Forward proxy: the client's agent
+
+Concrete flow. An employee laptop on a corporate network requests `https://api.github.com`. The laptop is configured (OS proxy settings or a PAC file) to send outbound traffic to `proxy.corp.internal:3128`. The browser connects to the proxy and issues an HTTP `CONNECT` for the destination; the proxy checks policy — is github.com allowed? — then opens its own connection to GitHub and tunnels the bytes. GitHub logs a request from the corporate egress IP; it never learns which of 10,000 laptops asked.
+
+Why organizations bother:
+
+- **Egress control.** The proxy is a choke point: only it can reach the internet, so "what can our machines talk to?" becomes one policy file instead of ten thousand firewall rules — and a compromised internal host can't exfiltrate data to arbitrary endpoints.
+- **Content filtering and audit.** Block categories of sites, log who fetched what, scan downloads for malware.
+- **Anonymity.** The server sees the proxy, not you. Tor is the extreme version — three chained forward proxies, each knowing only its neighbors.
+- **Shared caching.** Historically big — a campus Squid cache saved real bandwidth in the dial-up era — but HTTPS has mostly killed it, since the proxy can't cache what it can't decrypt.
+
+A **transparent proxy** is a forward proxy the client didn't opt into: the network silently redirects outbound traffic through it (a router rule steering all port-80/443 traffic, as ISPs and hotel Wi-Fi do). Same client-side role, just without the client's knowledge or configuration.
+
+<Diagram caption="Forward proxy: clients funnel outbound traffic through a proxy they configured; the origin server sees only the proxy's IP.">
+  <svg viewBox="0 0 680 300" width="100%" role="img" aria-label="Two clients inside a client network send requests to a forward proxy, which forwards them across the internet to an origin server that sees only the proxy's IP address.">
+    <defs>
+      <marker id="fp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="15" y="35" width="345" height="235" rx="10" fill="none" class="s-border" stroke-dasharray="6 5" />
+    <text x="30" y="58" class="svg-label small muted">client's network</text>
+    <rect x="40" y="85" width="110" height="44" rx="8" class="f-inset s-border" />
+    <text x="95" y="112" text-anchor="middle" class="svg-label">client A</text>
+    <rect x="40" y="175" width="110" height="44" rx="8" class="f-inset s-border" />
+    <text x="95" y="202" text-anchor="middle" class="svg-label">client B</text>
+    <rect x="215" y="125" width="120" height="54" rx="8" class="f-raised s-accent" />
+    <text x="275" y="148" text-anchor="middle" class="svg-label">forward</text>
+    <text x="275" y="166" text-anchor="middle" class="svg-label">proxy</text>
+    <line x1="150" y1="107" x2="210" y2="138" class="s-muted" stroke-width="1.5" marker-end="url(#fp-arrow)" />
+    <line x1="150" y1="197" x2="210" y2="166" class="s-muted" stroke-width="1.5" marker-end="url(#fp-arrow)" />
+    <line x1="415" y1="45" x2="415" y2="120" class="s-border" stroke-dasharray="3 6" />
+    <line x1="415" y1="185" x2="415" y2="265" class="s-border" stroke-dasharray="3 6" />
+    <text x="415" y="30" text-anchor="middle" class="svg-label small muted">internet</text>
+    <line x1="335" y1="152" x2="510" y2="152" class="s-accent" stroke-width="1.5" marker-end="url(#fp-arrow)" />
+    <text x="422" y="140" text-anchor="middle" class="svg-label small muted">src IP = proxy</text>
+    <rect x="515" y="125" width="140" height="54" rx="8" class="f-inset s-border" />
+    <text x="585" y="148" text-anchor="middle" class="svg-label">origin</text>
+    <text x="585" y="166" text-anchor="middle" class="svg-label">server</text>
+    <text x="585" y="204" text-anchor="middle" class="svg-label small muted">sees the proxy,</text>
+    <text x="585" y="220" text-anchor="middle" class="svg-label small muted">not the client</text>
+  </svg>
+</Diagram>
+
+## Reverse proxy: the server's front door
+
+Concrete flow. A user hits `https://api.example.com/orders`. DNS resolves to the reverse proxy's public IP. The client completes a TCP handshake and a TLS handshake **with the proxy** — the certificate for `api.example.com` lives there. The proxy decrypts the request, inspects the path and headers, picks a healthy backend from the private app-server pool, and forwards it (adding `X-Forwarded-For` so the app still knows the caller's IP). The response flows back through the proxy, possibly compressed or served straight from its cache. The client saw exactly one host the entire time.
+
+Why the server side bothers:
+
+- **TLS termination.** Handshakes and record encryption cost CPU; centralizing them means app servers speak plain HTTP internally and certificates rotate in one place instead of fifty.
+- **Load balancing.** One public IP fans out across N backends — the defining job of a load balancer, which is really a reverse proxy specialized for traffic distribution (the Load Balancing topic covers the algorithms).
+- **Caching and compression.** Serve a hot response from proxy memory in well under a millisecond instead of a 50ms backend render; gzip or brotli on the way out.
+- **Security and hiding topology.** A WAF filters injection attempts before they reach app code. Backends keep private IPs attackers can't count, fingerprint, or hit directly — and you can upgrade or drain them invisibly.
+- **Connection management.** Ten thousand slow mobile clients holding keep-alive connections collapse into a few dozen warm, multiplexed connections per backend.
+
+<Diagram caption="Reverse proxy: the client connects to one public endpoint; the proxy terminates TLS and fans requests out to hidden backends.">
+  <svg viewBox="0 0 680 300" width="100%" role="img" aria-label="A client connects over TLS to a reverse proxy, which sits inside the server's private network and forwards requests to one of three hidden application servers.">
+    <defs>
+      <marker id="rp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="220" y="18" width="445" height="266" rx="10" fill="none" class="s-border" stroke-dasharray="6 5" />
+    <text x="650" y="42" text-anchor="end" class="svg-label small muted">private network</text>
+    <rect x="25" y="123" width="110" height="54" rx="8" class="f-inset s-border" />
+    <text x="80" y="154" text-anchor="middle" class="svg-label">client</text>
+    <text x="80" y="204" text-anchor="middle" class="svg-label small muted">sees one host</text>
+    <line x1="135" y1="150" x2="240" y2="150" class="s-accent" stroke-width="1.5" marker-end="url(#rp-arrow)" />
+    <text x="188" y="138" text-anchor="middle" class="svg-label small muted">https</text>
+    <rect x="245" y="123" width="130" height="54" rx="8" class="f-raised s-accent" />
+    <text x="310" y="146" text-anchor="middle" class="svg-label">reverse</text>
+    <text x="310" y="164" text-anchor="middle" class="svg-label">proxy</text>
+    <text x="310" y="106" text-anchor="middle" class="svg-label small muted">TLS ends here</text>
+    <rect x="510" y="48" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="575" y="75" text-anchor="middle" class="svg-label">app-1</text>
+    <rect x="510" y="128" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="575" y="155" text-anchor="middle" class="svg-label">app-2</text>
+    <rect x="510" y="208" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="575" y="235" text-anchor="middle" class="svg-label">app-3</text>
+    <line x1="375" y1="138" x2="505" y2="74" class="s-muted" stroke-width="1.5" marker-end="url(#rp-arrow)" />
+    <line x1="375" y1="150" x2="505" y2="150" class="s-muted" stroke-width="1.5" marker-end="url(#rp-arrow)" />
+    <line x1="375" y1="162" x2="505" y2="226" class="s-muted" stroke-width="1.5" marker-end="url(#rp-arrow)" />
+  </svg>
+</Diagram>
+
+## Placing the familiar names on the map
+
+Most infrastructure you've heard of is a reverse proxy wearing a specialty hat:
+
+- **nginx** — a `proxy_pass` block makes it a reverse proxy, its overwhelmingly common deployment. (The one caveat to "same binary": nginx has no native `CONNECT` support, so it can't forward-proxy HTTPS without third-party patches — that's Squid's territory.) HAProxy, Envoy, and Caddy live in the same space.
+- **Load balancers** are reverse proxies whose defining feature is distribution across a backend pool (at L4 they balance connections without even parsing HTTP).
+- **CDNs** — Cloudflare, Fastly, CloudFront — are reverse proxies replicated at hundreds of edge locations worldwide, so the "front door" is 20ms from the user instead of 200ms. The CDN topic covers what happens at that edge.
+- **API gateways** — Kong, AWS API Gateway — are reverse proxies specialized for APIs: authentication, rate limiting, per-route policies. The API Gateway topic goes deep there.
+
+## Trade-offs and pitfalls
+
+- **You added a hop.** In-datacenter that's a fraction of a millisecond and usually irrelevant; a mis-homed proxy hairpinning traffic through another region adds tens of milliseconds to every request.
+- **You added a single point of failure.** The proxy needs its own high availability — a pair with a floating IP, or DNS across several instances. Many outages trace to "the thing in front of everything" being one thing.
+- **Client IP evaporates.** Backends see the proxy's IP unless it forwards the original in `X-Forwarded-For` or the PROXY protocol — and they must trust that header only from their own proxy, or anyone can spoof an IP past your rate limiter and audit logs.
+- **TLS termination means plaintext inside.** Fine for many threat models; zero-trust environments re-encrypt proxy-to-backend (often mTLS), paying the handshake cost back.
+- **Middleboxes distort protocols.** Default buffering breaks streaming responses; proxy timeouts stack with backend timeouts; WebSockets and gRPC need explicit passthrough config. When "it works locally but not in prod," suspect the proxy config.
+- **Forward-proxy TLS inspection breaks trust.** Corporate proxies that decrypt HTTPS must re-sign traffic with an internal CA, breaking certificate pinning and quietly making the proxy holder-of-all-secrets.
+
+## When to reach for which
+
+Exposing a service to the internet? Put a reverse proxy in front from day one — even with a single backend, TLS, gzip, and topology hiding are nearly free, and you'll want load balancing the day you add a second server. Controlling what your own machines send out — corporate networks, egress policies for production workloads, scrapers needing IP rotation? Forward proxy territory. And when an interviewer says just "proxy," ask which direction: who deploys it, who is hidden, and what it solves all flow from whose side it's on.

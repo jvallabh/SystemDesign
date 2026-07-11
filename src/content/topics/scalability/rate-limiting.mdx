@@ -2,9 +2,145 @@
 title: "Rate Limiting Algorithms"
 category: scalability
 tier: flagship
-summary: "Token bucket, leaky bucket, and window counters — see how each handles bursts differently."
+summary: "Token bucket, leaky bucket, and window counters — how each admits bursts, what each costs, and how to enforce limits across a fleet."
 order: 2
 sim: RateLimitingSim
 resources: [rate-limiting-video]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+import RateLimitingSim from '../../../components/sims/RateLimitingSim';
+
+Every shared system has a capacity ceiling, and without a gate, one aggressive client — a retry loop gone wrong, a scraper, a buggy cron job — can consume it all and degrade service for everyone else. A rate limiter refuses excess requests *early*, before they touch databases or downstream services, converting an overload into a cheap rejection. The interesting part is not whether to limit but *how*: the four classic algorithms differ in exactly one dimension that matters — how they treat bursts — and in one that costs money: memory per client.
+
+## Token bucket: budget with burst allowance
+
+Each client gets a bucket holding up to `b` tokens, refilled continuously at `r` tokens per second. A request takes one token and proceeds; an empty bucket means rejection. The two parameters answer two different questions: `r` is the sustained rate you can afford long-term, `b` is how much burst you tolerate at once. A client that has been quiet for a while accumulates tokens (up to `b`) and can spend them in a spike — which matches how real traffic behaves. A user loading a dashboard fires 20 API calls in 200ms, then nothing for a minute. Token bucket admits that burst; a strict per-second limit would reject half of it for no good reason.
+
+<Diagram caption="Token bucket: refill at rate r, spend one token per request, reject when empty.">
+  <svg viewBox="0 0 660 300" width="100%" role="img" aria-label="A bucket refilled with tokens at rate r; incoming requests take a token and are allowed, or find the bucket empty and get rejected with 429">
+    <defs>
+      <marker id="tb-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-muted" />
+      </marker>
+      <marker id="tb-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-ok" />
+      </marker>
+      <marker id="tb-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-danger" />
+      </marker>
+    </defs>
+    <text x="330" y="32" text-anchor="middle" class="svg-label">refill: r tokens/sec</text>
+    <line x1="330" y1="44" x2="330" y2="86" class="s-muted" stroke-width="1.5" marker-end="url(#tb-arr)" />
+    <rect x="250" y="92" width="160" height="120" rx="8" class="f-inset s-border" />
+    <circle cx="285" cy="185" r="9" class="f-accent" />
+    <circle cx="311" cy="185" r="9" class="f-accent" />
+    <circle cx="337" cy="185" r="9" class="f-accent" />
+    <circle cx="363" cy="185" r="9" class="f-accent" />
+    <circle cx="298" cy="160" r="9" class="f-accent" />
+    <circle cx="324" cy="160" r="9" class="f-accent" />
+    <text x="330" y="238" text-anchor="middle" class="svg-label muted">bucket (capacity b)</text>
+    <text x="130" y="138" text-anchor="middle" class="svg-label">requests</text>
+    <line x1="60" y1="152" x2="244" y2="152" class="s-muted" stroke-width="1.5" marker-end="url(#tb-arr)" />
+    <line x1="410" y1="126" x2="520" y2="100" class="s-ok" stroke-width="1.5" marker-end="url(#tb-ok)" />
+    <text x="540" y="92" text-anchor="start" class="svg-label small">token taken:</text>
+    <text x="540" y="108" text-anchor="start" class="svg-label small">allow (200)</text>
+    <line x1="410" y1="180" x2="520" y2="206" class="s-danger" stroke-width="1.5" marker-end="url(#tb-bad)" />
+    <text x="540" y="204" text-anchor="start" class="svg-label small">bucket empty:</text>
+    <text x="540" y="220" text-anchor="start" class="svg-label small">reject (429)</text>
+  </svg>
+</Diagram>
+
+State per client is tiny: a token count and a last-refill timestamp — two numbers, maybe 16 bytes. That is why token bucket dominates in practice. Stripe's API uses a token-bucket-style limiter (on the order of 100 read and 100 write operations per second per account in live mode), and AWS API Gateway's throttling is explicitly rate-plus-burst.
+
+The failure mode is the flip side of the feature: if `b` is large, a cold client can legally slam you with `b` requests in one instant. Size `b` against what your backend can absorb as an instantaneous spike, not against what feels generous.
+
+## Leaky bucket: smoothing instead of bursting
+
+Leaky bucket inverts the goal. Requests enter a queue (the bucket); the system drains it at a fixed rate. Output is perfectly smooth — one request every `1/r` seconds — regardless of how lumpy the input is. When the queue is full, new arrivals are dropped.
+
+This is the right shape when the thing you protect cares about *pacing*, not totals: a downstream API with its own strict limit, a mail-sending pipeline, traffic shaping in routers (where the algorithm originated). The cost is latency: a request arriving behind a full queue waits, and queued work is stale work. For interactive APIs, smoothing user-facing requests through a queue mostly converts fast rejections into slow ones — usually a bad trade. The distinction to internalize: **token bucket bounds average rate but permits bursts; leaky bucket enforces a constant output rate and absorbs bursts as queueing delay.**
+
+## Fixed window: cheap and slightly wrong
+
+Fixed window is the algorithm everyone writes first: bucket time into intervals ("100 requests per minute" means the minute starting at 12:00:00), keep one counter per client per window, reject when it exceeds the quota. One integer, atomic increment, counter expires with the window. It is by far the cheapest option.
+
+The defect is at the boundary. A client can send 100 requests at 12:00:59 and another 100 at 12:01:01 — both windows are individually within quota, but you just admitted 200 requests in two seconds, roughly double the intended rate, concentrated exactly where it hurts.
+
+<Diagram caption="Fixed window boundary artifact: two full quotas land within seconds of each other.">
+  <svg viewBox="0 0 660 220" width="100%" role="img" aria-label="A timeline with two one-minute windows; a burst of 100 requests just before the boundary and another 100 just after are both admitted, giving 200 requests in about two seconds">
+    <defs>
+      <marker id="fw-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="60" y="64" width="260" height="80" class="f-inset s-border" />
+    <rect x="320" y="64" width="260" height="80" class="f-inset s-border" />
+    <text x="190" y="52" text-anchor="middle" class="svg-label small muted">window 1 — quota 100</text>
+    <text x="450" y="52" text-anchor="middle" class="svg-label small muted">window 2 — quota 100</text>
+    <line x1="320" y1="56" x2="320" y2="152" class="s-danger" stroke-width="1.5" stroke-dasharray="4 4" />
+    <rect x="294" y="84" width="20" height="60" class="f-danger" />
+    <rect x="326" y="84" width="20" height="60" class="f-danger" />
+    <text x="286" y="78" text-anchor="end" class="svg-label small">100 req @ 0:59</text>
+    <text x="354" y="78" text-anchor="start" class="svg-label small">100 req @ 1:01</text>
+    <line x1="40" y1="160" x2="620" y2="160" class="s-muted" stroke-width="1.5" marker-end="url(#fw-arr)" />
+    <text x="60" y="182" text-anchor="middle" class="svg-label small muted">0:00</text>
+    <text x="320" y="182" text-anchor="middle" class="svg-label small muted">1:00</text>
+    <text x="580" y="182" text-anchor="middle" class="svg-label small muted">2:00</text>
+    <text x="330" y="206" text-anchor="middle" class="svg-label small">both admitted: ~2x quota in ~2 seconds</text>
+  </svg>
+</Diagram>
+
+Whether that matters depends on your headroom. If the limit is a soft fairness policy, fixed window is fine. If the limit exists because 2x actually breaks something, it is not. GitHub's REST API (5,000 requests per hour authenticated) is effectively a fixed hourly window — acceptable because the hourly quota is generous relative to instantaneous capacity.
+
+## Sliding window: exact, then practical
+
+**Sliding window log** fixes the boundary problem exactly: store a timestamp for every request, and on each arrival count how many fall inside the trailing window. Perfectly accurate, but you now keep up to N timestamps per client — at 1,000 requests per minute that is kilobytes per client instead of bytes, and every check scans or trims a sorted set. Reserve it for low-rate, high-stakes limits (login attempts, password resets, OTP sends) where exactness is the point and N is small.
+
+**Sliding window counter** is the practical compromise: keep fixed-window counters for the current and previous windows, and estimate the trailing-window count as `current + previous * overlap_fraction`. Thirty seconds into the current minute, the previous window contributes half its count. Two integers per client, and the boundary spike shrinks from roughly 2x to a small error under the (usually reasonable) assumption that the previous window's traffic was evenly spread. Cloudflare has described using this scheme fleet-wide; it is the default answer for high-volume API limiting.
+
+| Algorithm | State per client | Bursts | Boundary accuracy | Reach for it when |
+|---|---|---|---|---|
+| Token bucket | ~2 numbers | Allowed, up to `b` | Exact (continuous) | Default for APIs; burst-friendly quotas |
+| Leaky bucket | Queue (up to size) | Absorbed as delay | Exact (continuous) | Pacing a strict downstream; shaping |
+| Fixed window | 1 counter | Up to ~2x at boundary | Poor at edges | Coarse quotas with headroom |
+| Sliding window log | N timestamps | None beyond quota | Exact | Low-rate, high-stakes limits |
+| Sliding window counter | 2 counters | Slight over/under | Good approximation | High-volume distributed limiting |
+
+The differences are easiest to feel by watching them side by side. In the simulator below, try hitting the burst button under each algorithm: token bucket drains its reserve then clamps to the refill rate, while leaky bucket admits the same burst only as a slow trickle. Then park the request rate near the quota and fire a burst straddling a window boundary — fixed window admits the double spike, and the sliding window counter shaves it back down.
+
+<RateLimitingSim client:visible />
+
+## Making it work in production
+
+**What to key on.** A limit is meaningless until you decide whose counter increments. API key or user ID is the honest identity for authenticated traffic. IP address is the fallback for anonymous traffic, but it punishes users behind corporate NAT and barely slows an attacker with a botnet. Real systems layer keys: a global per-IP ceiling at the edge, per-API-key quotas at the gateway (the enforcement point the API Gateways topic covers in depth), and per-endpoint limits for expensive operations — a search endpoint deserves a tighter budget than a health check.
+
+**Distributed counters.** With one server, an in-memory counter works. With twenty, each node limiting locally multiplies every quota by twenty. The standard fix is centralized state in Redis — but the naive `GET`, check, `SET` sequence is a read-modify-write race: two nodes read 99, both admit, both write 100, and the quota leaks under exactly the concurrency the limiter exists to handle. Fixed windows dodge this because `INCR` is atomic: increment first, then compare the returned value to the quota. Token bucket state (tokens plus timestamp) cannot be updated atomically with plain commands, so it goes in a short Lua script, which Redis executes atomically:
+
+```lua
+-- token bucket check, executed atomically by Redis
+local tokens, ts = unpack(redis.call('HMGET', KEYS[1], 'tokens', 'ts'))
+local now, rate, burst = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3])
+tokens = math.min(burst, (tonumber(tokens) or burst) + (now - (tonumber(ts) or now)) * rate)
+local allowed = tokens >= 1
+if allowed then tokens = tokens - 1 end
+redis.call('HMSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('EXPIRE', KEYS[1], 60)
+return allowed and 1 or 0
+```
+
+This adds a network round trip (typically 0.5–1ms to a co-located Redis) to every request, which is why very-high-volume systems batch: each node claims a local allowance of, say, 50 tokens from the central store and spends it locally, trading a little accuracy for a 50x drop in Redis traffic.
+
+**Telling the client.** A rejected request returns HTTP 429 (RFC 6585) with a `Retry-After` header saying when to try again. Include limit headers on *successful* responses too — GitHub's `x-ratelimit-limit`, `x-ratelimit-remaining`, and `x-ratelimit-reset` let well-behaved clients pace themselves before ever hitting the wall (an IETF draft is standardizing these as `RateLimit-*`). And clients must back off with **jitter**: if a thousand throttled clients all retry exactly when `Retry-After` expires, they arrive as a synchronized wave and re-trigger the limit. Exponential backoff with a random delay spread breaks the herd.
+
+## Trade-offs and pitfalls
+
+- **Burst size is a capacity promise.** Token bucket's `b` is the spike your backend must survive. Teams tune `r` carefully and leave `b` at a careless default.
+- **Limiting late wastes the win.** A limiter after your app has parsed, authenticated, and queried still spent the resources it was protecting. Enforce as early as the key allows: IP limits at the edge, key limits at the gateway.
+- **Central store as a new failure point.** If Redis is down, does the limiter fail open (unprotected) or closed (self-inflicted outage)? Most APIs fail open with an alert; abuse-critical paths like login fail closed. Decide explicitly — the Availability topic covers the surrounding protective patterns.
+- **Silent throttling breeds retry storms.** Rejecting without 429 and `Retry-After` guarantees clients hammer harder. The response contract is part of the algorithm.
+- **One global limit is a blunt instrument.** Cheap and expensive endpoints under one counter means scrapers exhaust quota that real users needed.
+
+## Choosing
+
+Default to **token bucket** per API key: two numbers of state, honest burst handling, one Lua script to make it distributed. Use **sliding window counter** when you need window-style quotas ("10,000 per hour") enforced accurately at high volume, and **sliding window log** only for small, security-sensitive limits. **Fixed window** is acceptable when the quota has 2x headroom, and **leaky bucket** when the requirement is a smooth output rate rather than a cap. Whatever you pick, the client-facing contract — 429, `Retry-After`, limit headers, jittered backoff — matters as much as the counting.

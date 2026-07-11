@@ -116,7 +116,7 @@ function dotTarget(d: Dot, mode: Mode, boxes: Box[]): { x: number; y: number } {
 
 function stepWorld(w: World, dtMs: number, p: StepParams) {
   // Ease displayed utilization/latency toward targets (frame-rate independent).
-  const k = Math.min(1, dtMs / 180);
+  const k = 1 - Math.exp(-dtMs / 180);
   w.dispUtil += (p.util - w.dispUtil) * k;
   w.dispLat += (p.latency - w.dispLat) * k;
 
@@ -203,6 +203,7 @@ export default function ScalingSim() {
   const m = modelOf(mode, load, tier, n);
   const boxes = fleetBoxes(mode, tier, n);
   const over = m.util >= 1;
+  const fleetCx = mode === 'vertical' ? V_CX : GRID_CX;
 
   useRafLoop((dt) => {
     stepWorld(world.current, dt, {
@@ -272,7 +273,7 @@ export default function ScalingSim() {
         { label: 'capacity', value: `${Math.round(m.capacity)} rps` },
         { label: 'p50 latency', value: `${Math.round(wd.dispLat)} ms` },
         { label: 'errors/s', value: Math.round(m.errors) },
-        { label: 'cost', value: mode === 'vertical' ? String(m.cost) : m.cost.toFixed(1) },
+        { label: 'cost units', value: mode === 'vertical' ? String(m.cost) : m.cost.toFixed(1) },
       ]}
     >
       <svg
@@ -372,14 +373,14 @@ export default function ScalingSim() {
         )}
 
         {/* fleet caption + error annotation */}
-        <text x={V_CX} y={296} textAnchor="middle" className="svg-label small muted">
+        <text x={fleetCx} y={296} textAnchor="middle" className="svg-label small muted">
           {mode === 'vertical'
             ? `tier ${tier} machine — ${Math.round(m.capacity)} rps capacity`
             : `${n} × ${PER_RPS} rps — ${Math.round(m.capacity)} rps effective (coordination overhead)`}
         </text>
         {m.errors > 0.5 && (
           <text
-            x={V_CX}
+            x={fleetCx}
             y={316}
             textAnchor="middle"
             className="svg-label small"

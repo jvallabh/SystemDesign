@@ -7,4 +7,120 @@ order: 3
 sim: ScalingSim
 resources: [scaling-course]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+import ScalingSim from '../../../components/sims/ScalingSim';
+
+Every successful system eventually takes more load than its hardware can serve. When that day comes you have exactly two moves: replace the machine with a bigger one, or add more machines and spread the work across them. Much of system design — load balancers, caches, replicas, shards — exists to make the second move possible, because the first one always runs out.
+
+## Scale up or scale out
+
+Vertical scaling ("scaling up") is the move that requires no engineering. The same monolith and the same Postgres run unchanged; they just get more cores, more RAM, faster disks. Cloud providers have turned it into a dropdown: AWS will rent you anything from 2 vCPUs with 8 GiB of RAM to a single instance with 896 vCPUs and 32 TiB. For longer than most architecture diagrams admit, this is the right choice — it buys capacity with zero architectural risk.
+
+It has three structural problems. Cost grows superlinearly: the top of the range costs far more per unit of compute than the middle, because exotic hardware carries a premium and doubling cores rarely doubles throughput once memory bandwidth and lock contention bite. There is a hard ceiling: at some point no bigger box exists at any price. And it is a single failure domain: when the big box dies, everything dies with it, so the redundancy story is a second big box sitting mostly idle.
+
+Horizontal scaling ("scaling out") inverts all three. Commodity machines price linearly, capacity has no practical ceiling, and losing one node out of twenty costs 5 percent of capacity instead of 100. The price is architectural: requests must be spreadable across machines (Load Balancing), the machines must not care which request lands where (Stateful vs Stateless), and once the data itself outgrows one box it has to be split (Sharding and Partitioning). None of that is free, and all of it has to exist before the second server helps at all.
+
+|                  | Vertical (up)                     | Horizontal (out)                          |
+| ---------------- | --------------------------------- | ----------------------------------------- |
+| Code changes     | None                              | Statelessness, distribution, discovery    |
+| Cost curve       | Superlinear, then a wall          | Near-linear, minus coordination overhead  |
+| Capacity ceiling | Hard — the biggest box that exists | Soft — coordination eats marginal gains   |
+| Failure domain   | One machine is everything         | One machine is 1/N of capacity            |
+| Failure mode     | Outage, then failover             | Graceful degradation                      |
+| Ops complexity   | Low                               | Balancing, rolling deploys, N× monitoring |
+
+<Diagram caption="Cost against needed capacity: scaling up gets expensive fast and then simply stops; scaling out stays near-linear but never quite flat, because coordination overhead grows with node count.">
+  <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="Graph of cost versus capacity. The vertical-scaling curve rises superlinearly and ends at a dashed hard-ceiling line. The horizontal-scaling curve rises gently and nearly linearly.">
+    <line x1="60" y1="250" x2="605" y2="250" class="s-muted" stroke-width="1" />
+    <line x1="60" y1="250" x2="60" y2="30" class="s-muted" stroke-width="1" />
+    <text x="330" y="282" text-anchor="middle" class="svg-label muted small">capacity needed →</text>
+    <text x="34" y="140" text-anchor="middle" class="svg-label muted small" transform="rotate(-90 34 140)">cost →</text>
+    <path d="M 60 246 C 160 236 260 205 320 130 C 350 92 366 60 374 42" fill="none" class="s-danger" stroke-width="2" />
+    <line x1="380" y1="250" x2="380" y2="44" class="s-danger" stroke-width="1" stroke-dasharray="5 4" />
+    <text x="380" y="32" text-anchor="middle" class="svg-label small">hard ceiling</text>
+    <text x="336" y="78" text-anchor="end" class="svg-label small">vertical (bigger box)</text>
+    <path d="M 60 246 C 240 222 420 190 596 140" fill="none" class="s-accent" stroke-width="2" />
+    <text x="490" y="192" text-anchor="middle" class="svg-label small muted">horizontal (more boxes)</text>
+  </svg>
+</Diagram>
+
+## Why ten machines never behave like ten machines
+
+Adding a machine adds work as well as capacity. Amdahl's law gives the first cut of intuition: any fraction of each request that is serialized — a lock, a leader that must approve every write, a row everyone increments — caps the speedup no matter how many machines you add. Serialize just 5 percent of the work and twenty machines deliver roughly a 10× speedup; infinite machines cap out at 20×.
+
+The Universal Scalability Law adds the uglier term: crosstalk. When nodes must talk to each other — cache invalidations, consensus rounds, session replication — coordination cost grows roughly with the square of the node count, so past some cluster size adding machines makes total throughput go *down*. The honest planning assumption: N machines buy noticeably less than N times one machine's throughput, and only a benchmark of the real cluster tells you how much less.
+
+## Latency explodes before throughput caps
+
+A server near its limit does not slow down gracefully — it queues. For a simple single-server model, average response time grows like 1/(1−ρ), where ρ is utilization. Put numbers on a service that needs 10 ms of actual work per request: at 50 percent utilization the average response is about 20 ms; at 80 percent, about 50 ms; at 90 percent, about 100 ms; at 95 percent, about 200 ms — and tail latency is far worse than the average at every point. The machine still reports plenty of headroom on throughput while your p99 has already blown the budget.
+
+This hockey stick drives two practical rules. Capacity-plan against a latency target, not against maximum throughput — the last 20 percent of a machine's throughput is unusable at acceptable latency. And treat roughly 70 to 80 percent sustained utilization as "full", because above that a small traffic bump produces a large latency spike.
+
+<Diagram caption="Queueing delay against utilization for a fixed service time: nearly flat, then vertical. The throughput ceiling arrives well after latency became unacceptable.">
+  <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="Graph of latency versus utilization. The curve is nearly flat until about 70 percent utilization, then rises steeply toward the top of the chart near 100 percent. A dashed line marks roughly 80 percent utilization.">
+    <line x1="60" y1="250" x2="605" y2="250" class="s-muted" stroke-width="1" />
+    <line x1="60" y1="250" x2="60" y2="30" class="s-muted" stroke-width="1" />
+    <line x1="330" y1="250" x2="330" y2="256" class="s-muted" stroke-width="1" />
+    <line x1="600" y1="250" x2="600" y2="256" class="s-muted" stroke-width="1" />
+    <text x="60" y="270" text-anchor="middle" class="svg-label muted small">0%</text>
+    <text x="330" y="270" text-anchor="middle" class="svg-label muted small">50%</text>
+    <text x="600" y="270" text-anchor="middle" class="svg-label muted small">100%</text>
+    <text x="330" y="290" text-anchor="middle" class="svg-label muted small">utilization →</text>
+    <text x="34" y="140" text-anchor="middle" class="svg-label muted small" transform="rotate(-90 34 140)">p99 latency →</text>
+    <path d="M 60 248 C 180 246 280 242 380 230 C 450 220 500 195 535 130 C 550 100 560 68 566 40" fill="none" class="s-accent" stroke-width="2" />
+    <line x1="492" y1="250" x2="492" y2="56" class="s-danger" stroke-width="1" stroke-dasharray="5 4" />
+    <text x="492" y="44" text-anchor="middle" class="svg-label small">≈80% is full</text>
+    <text x="230" y="224" text-anchor="middle" class="svg-label small muted">looks fine right until it isn't</text>
+  </svg>
+</Diagram>
+
+The simulation below puts both curves under your control. Try three experiments: crank request rate past the biggest single instance's ceiling and watch latency hockey-stick well before throughput flattens; switch to horizontal and add instances one at a time, watching cost per served request stay roughly flat where the big box's cost curved upward; then keep adding instances at a fixed load and notice the diminishing marginal throughput — coordination overhead made real.
+
+<ScalingSim client:visible />
+
+## The typical scaling journey
+
+Almost every web application walks the same road, and each step exists because the previous one exposed a new bottleneck.
+
+1. **One box, scaled up.** App and database together. Correct until it isn't. Stack Overflow famously served billions of monthly page views from a handful of large web servers and two beefy SQL Server machines — scale-up carries further than intuition suggests.
+2. **Stateless web tier behind a load balancer.** Move sessions out of process, put N identical app servers behind an LB. The web tier now scales by cloning; the database is untouched — and becomes the next bottleneck.
+3. **Cache.** Most workloads read far more than they write, so a cache absorbs the bulk of read traffic before it touches the database (Caching Strategies covers the how).
+4. **Read replicas.** Reads that miss the cache fan out across copies of the database; the primary handles only writes.
+5. **Sharding.** When write volume or data size outgrows one primary, the data itself gets split across machines. This is the expensive step — cross-shard queries and transactions stop being free — which is exactly why it comes last.
+
+The pragmatic reading: scale up first, and take each horizontal step only when measurement says the previous stage is exhausted. Every step to the right adds operational complexity that never comes back off the books.
+
+## What breaks first
+
+Under growing load it is almost never the stateless web tier that fails — stateless things clone trivially. State is where scaling dies. Check in this order:
+
+- **Database CPU and slow queries** — the usual first casualty, often masked until the cache tier has a bad day.
+- **Database connections** — every new app instance brings a connection pool; 50 instances × 20 connections can exhaust a Postgres default long before CPU does.
+- **Hot rows and locks** — one counter, one popular account, one "latest items" table serializing all writers.
+- **Disk IOPS on the primary** — write volume that no replica can absorb for you.
+- **External dependencies** — third-party APIs with rate limits that do not scale because you added servers.
+- **The load balancer and network** — genuinely last; a single modern LB handles hundreds of thousands of requests per second.
+
+## Autoscaling
+
+Autoscaling is horizontal scaling on a feedback loop, and the loop has sharp edges.
+
+**Scale on the right signal.** CPU is the default and often wrong: an IO-bound service can drown at 30 percent CPU. Scale on whatever saturates first — queue depth for workers, in-flight requests or requests per instance for web tiers. Latency is a tempting target but a lagging, noisy one; controllers keyed on it tend to oscillate.
+
+**Respect cold starts.** A new VM takes one to two minutes to serve traffic; a container takes seconds to tens of seconds; a JVM needs warmup on top. A spike that doubles traffic in 30 seconds beats any reactive scaler, so keep 30-plus percent headroom, set a minimum instance count that survives a plausible spike, and pre-scale for known events.
+
+**Scale in carefully.** Terminating an instance with requests in flight turns a cost optimization into an error budget hit — drain connections first, and cap scale-in speed.
+
+**Mind the downstream.** Autoscaling the web tier against a fixed-size database just moves the stampede: twenty fresh instances open twenty fresh connection pools and hammer a primary that scaled by exactly zero.
+
+## Trade-offs and pitfalls
+
+- **Premature distribution.** Taking on sharding-grade complexity at 100 requests per second that one medium box would serve. The complexity is permanent; the traffic projection usually isn't.
+- **The distributed monolith.** A "horizontal" tier that secretly shares state — sticky sessions, local file uploads, in-memory caches that must agree — has horizontal cost with vertical fragility.
+- **Scaling the wrong tier.** Doubling web servers when the database is the bottleneck spends money to make the outage bigger.
+- **Linear extrapolation.** "One node does 1,000 rps, so ten will do 10,000" ignores both coordination overhead and the shared dependencies behind those nodes. Load-test the actual cluster.
+
+## When to reach for which
+
+Scale up when you are under the ceiling and the team is small: it is the cheapest capacity per engineering hour that exists, and databases in particular reward big machines. Go horizontal when any of these becomes true: availability requirements demand surviving a machine failure (which forces at least two nodes regardless of load), traffic genuinely approaches the biggest box you can buy, load is spiky enough that elasticity beats provisioning for peak, or the superlinear price of the next box size upgrade exceeds the cost of the plumbing. And whichever path you take today, keep the application stateless — it costs little now and it is the one prerequisite you cannot retrofit under fire.
