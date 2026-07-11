@@ -6,4 +6,116 @@ summary: "Inverting the API: how services notify you when something happens inst
 order: 5
 resources: [webhooks-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+Most integrations begin with the consumer asking the provider the same question on a loop: has anything changed since last time? Poll every 30 seconds and you burn about 2,880 requests per day per client — nearly all answered "no" — while a genuinely fresh event still waits up to 30 seconds to be noticed. Webhooks invert the relationship: the consumer registers an HTTPS URL, and the provider POSTs an event to it the moment something happens. Instead of you calling the API, the API calls you.
+
+## Push, not poll
+
+| | Polling | Webhooks |
+|---|---|---|
+| Notification latency | your poll interval (seconds to minutes) | typically under a few seconds |
+| Cost at rest | constant requests even when nothing changes | zero traffic until an event occurs |
+| Who owns delivery | consumer (retry your own polls) | provider (queue, retries, dead-letter) |
+| Consumer infrastructure | a cron job or loop | a public, authenticated HTTPS endpoint |
+| Failure mode | stale data, rate-limit pressure | missed or duplicated deliveries |
+
+The trade is clear: webhooks buy low latency and low idle cost, and pay for it by turning the consumer into a server — one that must be reachable from the internet, verify who is calling, and survive duplicates. That last column is where most webhook integrations go wrong, so the rest of this page is about doing it right on both sides.
+
+## The delivery lifecycle
+
+A production webhook delivery is never "event happens, fire an HTTP request inline." The provider decouples the two with a queue, because the consumer's endpoint is slow, down, or deploying at any given moment, and a payment must not fail because a merchant's notification server did.
+
+<Diagram caption="The delivery lifecycle: events are enqueued, POSTed with a signature, acked fast, and retried with backoff on failure.">
+  <svg viewBox="0 0 660 262" width="100%" role="img" aria-label="An event flows into a delivery queue, a signed POST goes to the consumer endpoint, the consumer acks with a 2xx and processes asynchronously via an internal queue; timeouts or 5xx responses loop back to the delivery queue for retry with backoff.">
+    <defs>
+      <marker id="arr-wh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="10" y="70" width="130" height="52" rx="8" class="f-inset s-border" />
+    <text x="75" y="92" text-anchor="middle" class="svg-label">event</text>
+    <text x="75" y="110" text-anchor="middle" class="svg-label small muted">order.paid</text>
+    <rect x="190" y="70" width="150" height="52" rx="8" class="f-inset s-border" />
+    <text x="265" y="101" text-anchor="middle" class="svg-label">delivery queue</text>
+    <rect x="470" y="70" width="170" height="52" rx="8" class="f-inset s-accent" />
+    <text x="555" y="101" text-anchor="middle" class="svg-label">consumer endpoint</text>
+    <line x1="140" y1="96" x2="186" y2="96" class="s-muted" stroke-width="1.5" marker-end="url(#arr-wh)" />
+    <line x1="340" y1="96" x2="466" y2="96" class="s-muted" stroke-width="1.5" marker-end="url(#arr-wh)" />
+    <text x="403" y="118" text-anchor="middle" class="svg-label small">signed POST</text>
+    <text x="403" y="136" text-anchor="middle" class="svg-label small muted">HMAC in header</text>
+    <path d="M 555 66 L 555 30 L 265 30 L 265 66" fill="none" class="s-danger" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arr-wh)" />
+    <text x="410" y="22" text-anchor="middle" class="svg-label small muted">timeout or 5xx: re-enqueue with backoff</text>
+    <line x1="555" y1="122" x2="555" y2="186" class="s-muted" stroke-width="1.5" marker-end="url(#arr-wh)" />
+    <text x="545" y="158" text-anchor="end" class="svg-label small muted">ack 2xx fast, then</text>
+    <rect x="470" y="190" width="170" height="52" rx="8" class="f-inset s-border" />
+    <text x="555" y="212" text-anchor="middle" class="svg-label">internal queue</text>
+    <text x="555" y="230" text-anchor="middle" class="svg-label small muted">process async</text>
+  </svg>
+</Diagram>
+
+The steps, end to end: an event occurs and is written durably (often alongside the business transaction, via an outbox). A fan-out step finds every endpoint subscribed to that event type — one `order.paid` may become five deliveries. Each delivery is enqueued independently. A worker POSTs the event with an HMAC signature over the body, and waits a bounded time for a response — GitHub gives you 10 seconds before declaring the delivery dead. A 2xx marks it delivered; anything else, or a timeout, schedules a retry with exponential backoff. Stripe keeps retrying for up to three days, stretching intervals from minutes to hours; after the final failure the delivery is dead-lettered, the endpoint may be auto-disabled, and the consumer gets an email instead of a POST. (Queueing mechanics in general are the Message Queues page's territory.)
+
+## What the provider does and does not promise
+
+Retries create the defining contract of webhooks: **at-least-once delivery**. If the consumer processed the event but the 2xx got lost in a timeout, the provider retries and the consumer sees the event twice. Exactly-once is not on offer — so every consumer must be idempotent (the Idempotency page covers the techniques; here, deduping by event id is usually enough).
+
+Ordering is the second non-promise. Retries and parallel workers mean `invoice.paid` can arrive before the `invoice.created` it logically follows. Stripe says so explicitly. Consumers must key off the event's content and current state, never off arrival order.
+
+Payload size is a design choice. **Fat payloads** embed the full object — convenient, but the data may be minutes stale by the time a third retry lands, and sensitive fields sit in the consumer's request logs. **Thin payloads** send only an event id and type; the consumer calls back to fetch the current object.
+
+<Diagram caption="The thin-payload pattern: the webhook is a doorbell, not the package — the consumer fetches fresh state on receipt.">
+  <svg viewBox="0 0 660 220" width="100%" role="img" aria-label="The provider API sends a signed thin event containing only an id and type to the consumer; the consumer calls GET on the events endpoint and receives the full, fresh object back.">
+    <defs>
+      <marker id="arr-wh2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="20" y="65" width="150" height="100" rx="8" class="f-inset s-border" />
+    <text x="95" y="110" text-anchor="middle" class="svg-label">provider</text>
+    <text x="95" y="128" text-anchor="middle" class="svg-label small muted">api.stripe.com</text>
+    <rect x="470" y="65" width="150" height="100" rx="8" class="f-inset s-accent" />
+    <text x="545" y="110" text-anchor="middle" class="svg-label">consumer</text>
+    <text x="545" y="128" text-anchor="middle" class="svg-label small muted">your server</text>
+    <line x1="170" y1="90" x2="466" y2="90" class="s-muted" stroke-width="1.5" marker-end="url(#arr-wh2)" />
+    <text x="320" y="82" text-anchor="middle" class="svg-label small">1. signed POST: event id + type</text>
+    <line x1="470" y1="120" x2="174" y2="120" class="s-muted" stroke-width="1.5" marker-end="url(#arr-wh2)" />
+    <text x="320" y="112" text-anchor="middle" class="svg-label small">2. GET /v1/events/evt_42</text>
+    <line x1="170" y1="150" x2="466" y2="150" class="s-muted" stroke-width="1.5" marker-end="url(#arr-wh2)" />
+    <text x="320" y="142" text-anchor="middle" class="svg-label small">3. full object, fresh state</text>
+    <text x="320" y="196" text-anchor="middle" class="svg-label small muted">payload never goes stale; sensitive data stays behind API auth</text>
+  </svg>
+</Diagram>
+
+Fetch-on-receipt costs one extra API call per event, but it makes staleness impossible, keeps secrets behind normal API auth, and turns the webhook into what it really is: a hint that says "go look."
+
+## The consumer's four rules
+
+**Verify the signature.** A webhook endpoint is a public URL that mutates your system; without verification, anyone who guesses it can forge a `payment.succeeded` and ship themselves free goods. Providers sign each delivery with HMAC-SHA256 over the raw body using a shared secret — Stripe in the `Stripe-Signature` header, GitHub in `X-Hub-Signature-256`. Recompute the HMAC over the exact bytes received (before any JSON parsing, which can reorder or reformat) and compare with a constant-time function. Stripe's signature also covers a timestamp; reject anything older than about five minutes so a captured request cannot be replayed later. (GitHub's does not — its scheme relies on the secret alone.)
+
+**Return 2xx fast.** The provider's timeout is your budget — respond in well under 10 seconds, ideally tens of milliseconds. Any real work done inline risks a timeout, which triggers a retry, which duplicates work you already did.
+
+**Process asynchronously.** The handler should do exactly three things: verify, persist or enqueue, respond. Everything else happens in a worker after the ack. This is the Sync vs Async pattern applied at your front door.
+
+**Dedupe by event id.** Store processed event ids (a unique-constraint insert is the simplest form) and skip repeats. This single table converts at-least-once delivery into effectively-once processing.
+
+```text
+POST /hooks/stripe            ← thin event evt_9f2, type payment.succeeded
+  verify HMAC + timestamp     reject on mismatch (400)
+  INSERT event id             duplicate? return 200, stop
+  enqueue job                 respond 200 in ~20 ms
+  ...worker fetches object, updates order, sends email
+```
+
+## Trade-offs and pitfalls
+
+- **You inherit server problems.** Your endpoint must be up, fast, and reachable — a bad deploy now loses provider events, not just user requests. Dead-letter replay tooling on the provider side (Stripe's dashboard resend, GitHub's redelivery API) is your safety net; know where it is before you need it.
+- **Webhooks are not a source of truth.** Deliveries can be dropped after retries are exhausted. Serious consumers pair webhooks with a periodic reconciliation poll — webhooks for latency, polling for completeness.
+- **Silent failure is the default.** If your endpoint 200s while throwing away events, nobody notices for weeks. Monitor delivery age and event counts against expectations.
+- **Local development friction.** The provider cannot reach `localhost`; you need a tunnel (Stripe's CLI forwards events for exactly this reason).
+- **Skipped verification.** The most common real-world hole: teams ship the happy path and never check the signature. Treat an unverified webhook body as untrusted user input, because that is what it is.
+
+## When to reach for it
+
+Offer webhooks when you are the provider and consumers care about events measured in seconds, not minutes — payments, CI status, repository pushes. Consume them the same way, but budget for the full checklist: signature verification, fast ack, async processing, dedupe, and a reconciliation sweep. Stick with polling when events are rare and latency-tolerant (a nightly sync), when the consumer cannot expose a public endpoint, or when you need a guaranteed-complete listing rather than a best-effort stream. The strongest integrations use both: webhooks as the doorbell, the API as the source of truth.

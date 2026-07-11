@@ -6,4 +6,131 @@ summary: "The single front door for your services: routing, auth, rate limiting,
 order: 6
 resources: [api-gateways-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+Split a backend into twenty services and you inherit a question the monolith never asked: what do clients actually connect to? Exposing every service publicly means twenty places to terminate TLS, validate tokens, enforce quotas, and log requests — and clients that must know your internal topology, so every service split breaks someone. An API gateway answers with one front door: a single edge layer that every external request passes through before anything internal sees it.
+
+## What the front door does
+
+A gateway is a reverse proxy that has been taught about APIs. On every request it can perform some mix of:
+
+- **Routing** — map `/orders/*` to the orders service and `/users/*` to the users service, by path, host, or header.
+- **Authentication and authorization** — verify the JWT or API key once at the edge, reject bad credentials before they consume backend capacity, and pass a trusted identity header downstream so services never re-parse tokens (token mechanics live in the JWTs topic).
+- **Rate limiting and quotas** — per API key or per user, enforced before the request touches a database (algorithms are the Rate Limiting topic's job).
+- **TLS termination** — certificates live in one place; internal traffic can run plaintext or mesh-managed mTLS.
+- **Request/response transformation** — rewrite paths, inject headers, strip internal fields from responses, version-shim old clients.
+- **Protocol translation** — accept HTTP/JSON from browsers, speak gRPC to internal services; or bridge WebSocket connections to backend pub/sub.
+- **Response aggregation** — fan out one client call to several services and merge the results.
+- **Observability** — one choke point that logs, meters, and traces 100% of external traffic with consistent request IDs.
+
+Kong (built on nginx), Envoy-based gateways such as Emissary and Gloo, AWS API Gateway as a managed option, and hand-rolled nginx configs all occupy this slot.
+
+<Diagram caption="One gateway routes all external clients to internal services, applying cross-cutting policies once at the edge.">
+  <svg viewBox="0 0 680 320" width="100%" role="img" aria-label="Mobile, web, and partner clients send requests to a single API gateway, which applies TLS, auth, rate limits, and routing, then forwards to users, orders, and search services over different protocols">
+    <defs>
+      <marker id="gw-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="16" y="44" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="81" y="71" text-anchor="middle" class="svg-label">mobile app</text>
+    <rect x="16" y="134" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="81" y="161" text-anchor="middle" class="svg-label">web app</text>
+    <rect x="16" y="224" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="81" y="251" text-anchor="middle" class="svg-label">partner API</text>
+    <line x1="146" y1="66" x2="252" y2="126" class="s-muted" stroke-width="1.5" marker-end="url(#gw-arr)" />
+    <line x1="146" y1="156" x2="252" y2="156" class="s-muted" stroke-width="1.5" marker-end="url(#gw-arr)" />
+    <line x1="146" y1="246" x2="252" y2="186" class="s-muted" stroke-width="1.5" marker-end="url(#gw-arr)" />
+    <rect x="258" y="72" width="164" height="168" rx="10" class="f-raised s-accent" stroke-width="1.5" />
+    <text x="340" y="100" text-anchor="middle" class="svg-label">API gateway</text>
+    <text x="340" y="128" text-anchor="middle" class="svg-label small muted">TLS termination</text>
+    <text x="340" y="148" text-anchor="middle" class="svg-label small muted">authN / authZ</text>
+    <text x="340" y="168" text-anchor="middle" class="svg-label small muted">rate limiting</text>
+    <text x="340" y="188" text-anchor="middle" class="svg-label small muted">routing</text>
+    <text x="340" y="208" text-anchor="middle" class="svg-label small muted">metrics + logs</text>
+    <line x1="422" y1="116" x2="528" y2="66" class="s-muted" stroke-width="1.5" marker-end="url(#gw-arr)" />
+    <line x1="422" y1="156" x2="528" y2="156" class="s-muted" stroke-width="1.5" marker-end="url(#gw-arr)" />
+    <line x1="422" y1="196" x2="528" y2="246" class="s-muted" stroke-width="1.5" marker-end="url(#gw-arr)" />
+    <text x="475" y="76" text-anchor="middle" class="svg-label small muted">gRPC</text>
+    <text x="475" y="148" text-anchor="middle" class="svg-label small muted">HTTP</text>
+    <text x="475" y="236" text-anchor="middle" class="svg-label small muted">HTTP</text>
+    <rect x="534" y="44" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="599" y="71" text-anchor="middle" class="svg-label">users svc</text>
+    <rect x="534" y="134" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="599" y="161" text-anchor="middle" class="svg-label">orders svc</text>
+    <rect x="534" y="224" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="599" y="251" text-anchor="middle" class="svg-label">search svc</text>
+  </svg>
+</Diagram>
+
+## Why it exists: cross-cutting concerns, implemented once
+
+Every capability above is a *cross-cutting concern*: every service needs it, and none of it is any service's business logic. Without a gateway, each of twenty teams implements auth, quotas, and TLS twenty times, in several languages, drifting apart in subtle ways — and patching a TLS library vulnerability or changing the auth scheme means twenty coordinated deploys. With a gateway, it is one implementation, one config, one deploy. Security teams especially like this: the attack surface has one owner.
+
+The second payoff is a **stable public surface over shifting internals**. Clients see `/api/v1/orders`; behind the gateway you can split the orders service in two, migrate it from REST to gRPC, or move it to another cluster, and no client notices. The gateway is the seam that lets internals move.
+
+## Gateway vs reverse proxy vs load balancer vs service mesh
+
+These four get conflated because they all sit between callers and servers. They differ in direction and job:
+
+| Layer | Traffic direction | Core job | Distinct because |
+| --- | --- | --- | --- |
+| Reverse proxy | north-south | forward requests to backends | generic building block; a gateway is a reverse proxy plus API-aware policy (keys, quotas, transformation) |
+| Load balancer | north-south | spread load across replicas of *one* service | picks *which copy*; a gateway picks *which service* |
+| API gateway | north-south | one policy-enforcing front door across *many* services | API-level semantics: routes, auth, per-consumer limits |
+| Service mesh | east-west | secure and observe service-to-service calls via sidecars | manages traffic *between* services, not from the outside world |
+
+In practice they compose: an L4 load balancer spreads traffic across gateway replicas, the gateway routes to a service, and an internal balancer or mesh sidecar picks the replica. Proxy fundamentals belong to the Proxy vs Reverse Proxy topic, and balancing algorithms to Load Balancing.
+
+## Backends for frontends
+
+One general-purpose gateway serves every client equally — which often means equally badly. A mobile app on a flaky cellular link wants one round trip and a 5 KB payload; the web app wants rich nested data; partners want a frozen, versioned contract. The **BFF pattern** (backend for frontend) gives each client class its own small gateway, owned by the team that builds that client. The mobile BFF calls users, orders, and pricing internally, then returns exactly the compact shape the mobile screen needs — aggregation moves server-side, where inter-service hops cost a millisecond instead of a hundred. Netflix's edge API layer evolved this way for the same reason: hundreds of device types, no single response shape that fit them all.
+
+<Diagram caption="BFF: each client class gets its own thin gateway that aggregates shared services into a client-shaped response.">
+  <svg viewBox="0 0 680 260" width="100%" role="img" aria-label="A mobile app calls a mobile BFF and a web app calls a web BFF; both BFFs fan out to shared users, orders, and pricing services and return client-specific payloads">
+    <defs>
+      <marker id="bff-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="16" y="52" width="128" height="44" rx="8" class="f-inset s-border" />
+    <text x="80" y="79" text-anchor="middle" class="svg-label">mobile app</text>
+    <rect x="16" y="164" width="128" height="44" rx="8" class="f-inset s-border" />
+    <text x="80" y="191" text-anchor="middle" class="svg-label">web app</text>
+    <line x1="144" y1="74" x2="262" y2="74" class="s-muted" stroke-width="1.5" marker-end="url(#bff-arr)" />
+    <line x1="144" y1="186" x2="262" y2="186" class="s-muted" stroke-width="1.5" marker-end="url(#bff-arr)" />
+    <text x="203" y="64" text-anchor="middle" class="svg-label small muted">1 call, 5 KB</text>
+    <text x="203" y="176" text-anchor="middle" class="svg-label small muted">rich payload</text>
+    <rect x="268" y="52" width="128" height="44" rx="8" class="f-raised s-accent" stroke-width="1.5" />
+    <text x="332" y="79" text-anchor="middle" class="svg-label">mobile BFF</text>
+    <rect x="268" y="164" width="128" height="44" rx="8" class="f-raised s-accent-2" stroke-width="1.5" />
+    <text x="332" y="191" text-anchor="middle" class="svg-label">web BFF</text>
+    <line x1="396" y1="66" x2="528" y2="46" class="s-muted" stroke-width="1.5" marker-end="url(#bff-arr)" />
+    <line x1="396" y1="76" x2="528" y2="126" class="s-muted" stroke-width="1.5" marker-end="url(#bff-arr)" />
+    <line x1="396" y1="86" x2="524" y2="200" class="s-muted" stroke-width="1.5" marker-end="url(#bff-arr)" />
+    <line x1="396" y1="178" x2="528" y2="56" class="s-muted" stroke-width="1.5" marker-end="url(#bff-arr)" />
+    <line x1="396" y1="186" x2="528" y2="134" class="s-muted" stroke-width="1.5" marker-end="url(#bff-arr)" />
+    <line x1="396" y1="196" x2="528" y2="210" class="s-muted" stroke-width="1.5" marker-end="url(#bff-arr)" />
+    <rect x="534" y="24" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="599" y="51" text-anchor="middle" class="svg-label">users svc</text>
+    <rect x="534" y="108" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="599" y="135" text-anchor="middle" class="svg-label">orders svc</text>
+    <rect x="534" y="192" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="599" y="219" text-anchor="middle" class="svg-label">pricing svc</text>
+  </svg>
+</Diagram>
+
+Keep BFFs thin: they shape responses for one client, they do not own business rules. Two BFFs re-implementing checkout logic is the microservice version of copy-paste.
+
+## Pitfalls
+
+**Business logic creep.** The gateway's plugin system makes it temptingly easy to add "just one check" — and a year later, order validation lives in Lua snippets inside gateway config, untested and owned by nobody. Rule of thumb: the gateway decides *whether and where* a request goes; services decide *what happens*. If a change needs domain knowledge, it belongs in a service.
+
+**Single point of failure, plus a hop.** Every request now pays an extra network hop — typically 0.5–2 ms in-region, rarely the problem — but when the gateway is down, *everything* is down. Treat it as tier-zero infrastructure: stateless, replicated behind a dumb L4 balancer, config rollouts canaried like any deploy. A bad gateway config push is a full outage, not a partial one.
+
+**The gateway team as bottleneck.** If every new route or header tweak needs a ticket to a central platform team, the gateway becomes an organizational choke point that slows every product team. The fix is self-service: per-team declarative route config (Kubernetes's Gateway API model, or per-service config files merged at deploy) with the central team owning the platform, not each route.
+
+## When to reach for it
+
+A monolith with one client needs nginx, not a gateway product. Reach for a real gateway when you have several services behind one public API, external consumers needing keys and quotas, or a protocol boundary (public REST, internal gRPC). Add BFFs when distinct client classes genuinely want different response shapes — not before, because each BFF is another deployable to own. And do not confuse the axes: a gateway will not fix east-west observability, and a service mesh will not give you a public front door. North-south goes through the gateway; east-west goes through the mesh.

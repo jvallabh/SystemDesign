@@ -2,9 +2,147 @@
 title: "REST vs gRPC vs GraphQL vs tRPC"
 category: communication-apis
 tier: flagship
-summary: "Four API styles solve different problems — compare their trade-offs and learn when to reach for each."
+summary: "Four API styles answer the same question differently — compare contracts, wire formats, and fetching models, and learn which scenario calls for each."
 order: 1
 sim: ApiStylesSim
 resources: [api-styles-video]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+import Diagram from '../../../components/Diagram.astro';
+import ApiStylesSim from '../../../components/sims/ApiStylesSim';
+
+Every API answers the same question — how does a client ask a server to do something? — but the four dominant styles optimize for different callers. REST optimizes for the open web and its caches, gRPC for machine-to-machine efficiency inside a datacenter, GraphQL for many diverse clients with different data needs, and tRPC for one team moving fast inside a single TypeScript codebase. Pick by matching the style's core design choice to your situation, not by fashion.
+
+## REST: resources over a uniform interface
+
+REST's core bet is that a small, fixed vocabulary beats a custom one. Everything is a resource with a URL (`/users/42`), and every interaction uses the same handful of HTTP verbs with standard semantics: GET is safe and cacheable, PUT is idempotent, status codes mean the same thing everywhere. Because the interface is uniform, generic infrastructure understands your API without knowing anything about it — browsers, CDNs, proxies, and load balancers can cache GETs, retry idempotent calls, and route by path. That is why nearly every successful public API (Stripe, Twilio, GitHub's v3) is REST-shaped: any client on earth can call it with an HTTP library and nothing else. The cost is that the server decides response shapes, and there is usually no machine-checked contract unless you maintain an OpenAPI spec by hand. The dedicated REST page covers the constraints in depth.
+
+## gRPC: a compiled contract over HTTP/2
+
+gRPC starts from the opposite bet: inside your infrastructure you control both ends, so stop paying the web's flexibility tax. You define services and messages in a `.proto` file, and a compiler generates client stubs and server skeletons in a dozen languages — a Go service calls a Java service through what looks like a local function call. Messages travel as Protocol Buffers: binary, field-number tagged, typically 2–10x smaller than equivalent JSON and much cheaper to parse, because there are no field-name strings or text-to-number conversions on the wire. Transport is HTTP/2, which multiplexes many calls over one connection and enables first-class streaming — client-side, server-side, or bidirectional. This is Google's internal Stubby model open-sourced, and it is why polyglot microservice shops (Netflix, Uber, Dropbox) converged on it for service-to-service traffic. The catch: browsers cannot speak native gRPC, because browser APIs expose neither the HTTP/2 framing nor the response trailers gRPC needs — browser clients must go through a gRPC-Web translation proxy such as Envoy, losing client-side and bidirectional streaming along the way.
+
+## GraphQL: the client composes the query
+
+REST's fixed response shapes create two chronic problems for client teams. Over-fetching: the mobile app needs three fields but `/users/42` returns forty. Under-fetching: rendering one screen needs a user, their orders, and each order's items — three sequential round trips, painful when mobile RTTs run 100–300 ms and the screen takes close to a second just in network hops. Facebook built GraphQL in 2012 precisely for this: the server publishes one typed schema at a single endpoint, and each client sends a query naming exactly the fields it wants, arbitrarily nested. One round trip, one payload, no wasted bytes — and the iOS, Android, and web teams each shape their own responses without waiting for a backend ticket. GitHub's v4 API and Shopify's Storefront API expose GraphQL publicly for exactly this many-different-consumers reason.
+
+<Diagram caption="The same profile screen: REST pays three sequential round trips and ships whole resources; GraphQL pays one and ships only the requested fields.">
+  <svg viewBox="0 0 640 320" width="100%" role="img" aria-label="Top half: a REST client makes three sequential requests to three endpoints, fetching whole resources totaling about 40 kilobytes. Bottom half: a GraphQL client sends one query to a single graphql endpoint and receives about 2 kilobytes containing exactly the requested fields.">
+    <defs>
+      <marker id="api-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <text x="20" y="26" text-anchor="start" class="svg-label">REST</text>
+    <rect x="20" y="70" width="110" height="44" rx="8" class="f-raised s-border" />
+    <text x="75" y="97" text-anchor="middle" class="svg-label">client</text>
+    <rect x="450" y="40" width="170" height="36" rx="8" class="f-inset s-border" />
+    <text x="535" y="63" text-anchor="middle" class="svg-label small">/users/42</text>
+    <rect x="450" y="86" width="170" height="36" rx="8" class="f-inset s-border" />
+    <text x="535" y="109" text-anchor="middle" class="svg-label small">/users/42/orders</text>
+    <rect x="450" y="132" width="170" height="36" rx="8" class="f-inset s-border" />
+    <text x="535" y="155" text-anchor="middle" class="svg-label small">/orders/9/items</text>
+    <line x1="130" y1="80" x2="450" y2="58" class="s-muted" marker-end="url(#api-arrow)" />
+    <line x1="130" y1="92" x2="450" y2="104" class="s-muted" marker-end="url(#api-arrow)" />
+    <line x1="130" y1="104" x2="450" y2="150" class="s-muted" marker-end="url(#api-arrow)" />
+    <text x="290" y="46" text-anchor="middle" class="svg-label small muted">3 sequential round trips</text>
+    <text x="290" y="180" text-anchor="middle" class="svg-label small muted">whole resources, ~40 KB</text>
+    <text x="20" y="226" text-anchor="start" class="svg-label">GraphQL</text>
+    <rect x="20" y="248" width="110" height="44" rx="8" class="f-raised s-border" />
+    <text x="75" y="275" text-anchor="middle" class="svg-label">client</text>
+    <rect x="450" y="248" width="170" height="44" rx="8" class="f-inset s-accent" />
+    <text x="535" y="275" text-anchor="middle" class="svg-label small">/graphql</text>
+    <line x1="130" y1="270" x2="450" y2="270" class="s-accent" marker-end="url(#api-arrow)" />
+    <text x="290" y="260" text-anchor="middle" class="svg-label small muted">1 round trip, one nested query</text>
+    <text x="290" y="288" text-anchor="middle" class="svg-label small muted">exact fields only, ~2 KB</text>
+  </svg>
+</Diagram>
+
+The flexibility moves cost to the server. Any client can now send any query, so the server must defend itself against expensive ones — more on that below.
+
+## tRPC: the type system is the contract
+
+tRPC asks: if your frontend and backend are both TypeScript in one repository, why maintain a schema at all? You write server procedures as plain typed functions, and the client imports the router's *type* — not its code. The TypeScript compiler infers request and response types end to end, so calling `user.byId` on the client autocompletes, and changing a server return type turns into red squiggles in every affected component before you even save. There is no `.proto`, no SDL, no codegen step, no generated artifacts to drift out of date; on the wire it is ordinary JSON over HTTP. This is why it anchors the T3 stack and runs apps like Cal.com. The design choice is also the boundary: the "contract" exists only at compile time inside one TypeScript project, so tRPC cannot serve a Python consumer, a partner team, or a public API.
+
+## Head-to-head
+
+<Diagram caption="Where the contract lives and how the client obtains types: from optional and hand-maintained (REST) to fully inferred (tRPC).">
+  <svg viewBox="0 0 640 240" width="100%" role="img" aria-label="Four columns for REST, gRPC, GraphQL, and tRPC. Each shows the contract artifact on top — optional OpenAPI spec, proto file, SDL schema, TypeScript router type — flowing down via hand-written code, codegen, introspection, or type inference into the client-side types.">
+    <defs>
+      <marker id="api-arrow-2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <text x="80" y="30" text-anchor="middle" class="svg-label">REST</text>
+    <text x="240" y="30" text-anchor="middle" class="svg-label">gRPC</text>
+    <text x="400" y="30" text-anchor="middle" class="svg-label">GraphQL</text>
+    <text x="560" y="30" text-anchor="middle" class="svg-label">tRPC</text>
+    <rect x="15" y="50" width="130" height="44" rx="8" class="f-inset s-border" />
+    <text x="80" y="77" text-anchor="middle" class="svg-label small">OpenAPI (opt.)</text>
+    <rect x="175" y="50" width="130" height="44" rx="8" class="f-inset s-accent" />
+    <text x="240" y="77" text-anchor="middle" class="svg-label small">.proto file</text>
+    <rect x="335" y="50" width="130" height="44" rx="8" class="f-inset s-accent" />
+    <text x="400" y="77" text-anchor="middle" class="svg-label small">SDL schema</text>
+    <rect x="495" y="50" width="130" height="44" rx="8" class="f-inset s-accent-2" />
+    <text x="560" y="77" text-anchor="middle" class="svg-label small">TS router type</text>
+    <line x1="80" y1="94" x2="80" y2="116" class="s-muted" />
+    <text x="80" y="133" text-anchor="middle" class="svg-label small muted">hand-written</text>
+    <line x1="80" y1="143" x2="80" y2="156" class="s-muted" marker-end="url(#api-arrow-2)" />
+    <line x1="240" y1="94" x2="240" y2="116" class="s-muted" />
+    <text x="240" y="133" text-anchor="middle" class="svg-label small muted">codegen</text>
+    <line x1="240" y1="143" x2="240" y2="156" class="s-muted" marker-end="url(#api-arrow-2)" />
+    <line x1="400" y1="94" x2="400" y2="116" class="s-muted" />
+    <text x="400" y="133" text-anchor="middle" class="svg-label small muted">introspection</text>
+    <line x1="400" y1="143" x2="400" y2="156" class="s-muted" marker-end="url(#api-arrow-2)" />
+    <line x1="560" y1="94" x2="560" y2="116" class="s-muted" />
+    <text x="560" y="133" text-anchor="middle" class="svg-label small muted">inference</text>
+    <line x1="560" y1="143" x2="560" y2="156" class="s-muted" marker-end="url(#api-arrow-2)" />
+    <rect x="15" y="158" width="130" height="44" rx="8" class="f-raised s-border" />
+    <text x="80" y="185" text-anchor="middle" class="svg-label small">client code</text>
+    <rect x="175" y="158" width="130" height="44" rx="8" class="f-raised s-border" />
+    <text x="240" y="185" text-anchor="middle" class="svg-label small">generated stub</text>
+    <rect x="335" y="158" width="130" height="44" rx="8" class="f-raised s-border" />
+    <text x="400" y="185" text-anchor="middle" class="svg-label small">typed client</text>
+    <rect x="495" y="158" width="130" height="44" rx="8" class="f-raised s-border" />
+    <text x="560" y="185" text-anchor="middle" class="svg-label small">same types</text>
+  </svg>
+</Diagram>
+
+| | REST | gRPC | GraphQL | tRPC |
+|---|---|---|---|---|
+| Contract / schema | OpenAPI, optional and often stale | `.proto`, mandatory, codegen | SDL schema, mandatory, introspectable | TypeScript types, inferred |
+| Wire format | JSON (text) | Protobuf (binary) over HTTP/2 | JSON (text) | JSON |
+| Browser support | Native | Only via gRPC-Web proxy | Native | Native |
+| HTTP caching | Excellent — GET, ETags, CDNs | None | Poor by default (POST) | Limited (GET for queries) |
+| Streaming | Bolt-on (SSE) | First-class, bidirectional | Subscriptions, transport-dependent | Subscriptions via WebSocket |
+| Client–server coupling | Loose | Shared `.proto` | Schema-mediated | Compile-time, same repo |
+| Learning curve | Low | Medium | High on the server side | Low for TypeScript teams |
+
+To feel these differences rather than memorize them, try the simulator below. Pick the mobile profile-screen scenario and watch REST burn three sequential round trips while GraphQL finishes in one; switch to the internal service-to-service scenario and compare protobuf's payload size against JSON at high request rates; then raise the network latency slider and notice that round-trip count, not bytes, dominates completion time on slow links.
+
+<ApiStylesSim client:visible />
+
+## Versioning and evolution
+
+Each style evolves differently, and this matters more than launch-day ergonomics:
+
+- **REST** has no built-in story, so teams bolt one on — `/v2/` URL prefixes or media-type versioning — and keep old versions alive for years because clients they don't control migrate slowly, if ever. Additive changes are safe; anything else is a migration project.
+- **gRPC** inherits protobuf's compatibility rules: fields are identified by number, unknown fields are ignored, so you can add fields freely and old and new binaries interoperate. The one iron rule is never reuse or renumber a field. This makes rolling deploys across hundreds of services tractable.
+- **GraphQL** is deliberately version-less: you add fields, mark old ones `@deprecated`, and — because every query names its fields explicitly — measure exactly which clients still use a field before removing it. REST can't do that; a JSON response reveals nothing about which fields the caller read.
+- **tRPC** dissolves the problem: client and server ship in the same deploy, so there are never two live versions to reconcile. That is also the constraint — the moment an external consumer appears, you need a real, versioned boundary in front.
+
+## Trade-offs and pitfalls
+
+- **GraphQL's N+1 problem.** Resolvers run per field: a query for 100 posts with authors naively issues 1 query for posts plus 100 for authors. Every serious deployment batches with a DataLoader-style layer, and forgetting it is the classic GraphQL production incident.
+- **Unbounded query cost.** A public GraphQL endpoint accepting arbitrary nesting is a denial-of-service invitation. Defenses: depth limits, complexity scoring (GitHub budgets clients at 5,000 points per hour), and persisted queries that whitelist known shapes.
+- **GraphQL forfeits HTTP caching.** Everything is a POST to one URL, so CDNs and browser caches see nothing cacheable; you rebuild caching in the client (normalized stores like Apollo's) or via persisted GET queries.
+- **gRPC and the browser.** Plan the gRPC-Web proxy from day one if any browser will ever call the service — or accept running a REST/GraphQL edge in front of gRPC internals, which is what most large shops do.
+- **REST over-fetching compounds.** Each "just add the field to the response" request grows payloads for every client forever; per-client shaping is exactly the pressure that leads teams to GraphQL or a BFF.
+- **tRPC couples deploys.** Monorepo-or-bust: split the repo or add a non-TypeScript consumer and the compile-time contract evaporates.
+
+## Which one, when
+
+- **Public API for unknown third parties → REST.** Uniform interface, native browser support, CDN caching, and every language's HTTP client just works. This is why Stripe is REST.
+- **Polyglot internal microservices → gRPC.** Enforced contracts across languages, small binary payloads, multiplexed connections, streaming, and safe rolling upgrades via protobuf rules.
+- **Many differing clients or a mobile BFF → GraphQL.** When iOS, Android, web, and partners each need different slices of the same graph, client-composed queries beat endpoint proliferation — if you staff the server-side cost controls.
+- **Full-stack TypeScript monorepo → tRPC.** One team, one repo, one deploy: take the end-to-end type safety for free and skip the schema entirely.
+
+These compose. A common production shape is gRPC between services, GraphQL at the mobile edge, REST for the public API — and for pushing data to clients rather than answering requests, that's the Long Polling vs WebSockets topic.

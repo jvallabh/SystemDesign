@@ -2,9 +2,140 @@
 title: "Long Polling vs WebSockets"
 category: communication-apis
 tier: flagship
-summary: "Two ways to push server updates to clients — compare latency, overhead, and connection behavior live."
+summary: "From short polling to SSE and WebSockets — compare the latency, overhead, and connection behavior of server-push techniques live."
 order: 2
 sim: PollingWebSocketsSim
 resources: [polling-websockets-video]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+import PollingWebSocketsSim from '../../../components/sims/PollingWebSocketsSim';
+
+HTTP's contract is strictly client-initiated: the client asks, the server answers, the exchange ends. The server cannot start a conversation — so when new data appears on the server side (a chat message, a price tick, a job finishing), there is no built-in way to tell a client that hasn't asked. Every real-time technique is a workaround for that one asymmetry, and they form an escalation path: fake server push with repeated asking, then with *patient* asking, then abandon request/response entirely.
+
+## Short polling: ask on a timer
+
+The client requests the latest state every `n` seconds — `GET /messages?since=cursor` on a loop. The server answers immediately, usually with nothing new. It is the simplest possible scheme: stateless, cacheable, debuggable with `curl`, and it works through every proxy and firewall because it is ordinary HTTP.
+
+The cost is a latency/overhead dial with no good setting. Worst-case delivery latency **equals the poll interval** — an event landing just after a poll waits a full interval; on average it waits half of one. Tighten the interval and the overhead arithmetic turns ugly: a request line plus headers (cookies, user agent, accept headers) commonly runs 500–800 bytes, and the response headers add another 200–300 — call it roughly 700–1,000 bytes of pure envelope per cycle, before any payload. A client polling every 2 seconds makes about 43,000 requests a day even if nothing ever happens. A million such clients present 500,000 requests per second to your fleet, almost all of them returning an empty body. You are paying full request-processing cost — TLS record, routing, auth check, handler dispatch — to learn "nothing yet" tens of billions of times a day.
+
+## Long polling: hold the question open
+
+Long polling keeps the same request/response shape but moves the waiting to the server. The client asks; if there is nothing to say, the server *parks the request* instead of answering — typically for 25–30 seconds, just under the idle timeouts of intermediate proxies and load balancers. The moment data arrives, the server responds to the parked request and the client immediately re-asks. On timeout, the server sends an empty response and the client re-asks anyway.
+
+While a request is parked, delivery latency collapses to near zero — the answer leaves the instant the event occurs. Reconnection is built into the loop itself, which is part of the appeal: there is no separate "connection" to manage, just the next request. But there is a blind window between receiving a response and issuing the next request. The server must buffer events during that gap and the client must pass a cursor (last-seen event ID) so nothing is dropped.
+
+Each delivered message still costs a full HTTP cycle (those same hundreds of header bytes), and the server now holds one open request per connected client. On event-driven servers (Node, Go, Netty) a parked request is a few kilobytes of state; on a thread-per-request server it is a whole blocked thread, and 10,000 idle clients can starve the pool. Long polling remains a first-class API pattern where the client is another server: AWS SQS's `ReceiveMessage` with a 20-second wait is exactly this mechanism.
+
+<Diagram caption="The same event, three delivery paths: short polling waits for the next scheduled ask, long polling answers a parked request instantly, WebSockets push a frame on an already-open connection.">
+  <svg viewBox="0 0 660 330" width="100%" role="img" aria-label="Three timeline lanes for short polling, long polling, and WebSockets. An event occurs mid-timeline; short polling delivers it at the next poll tick, long polling and WebSockets deliver it immediately.">
+    <defs>
+      <marker id="pw-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <line x1="330" y1="44" x2="330" y2="288" class="s-accent-2" stroke-width="1.5" stroke-dasharray="5 4" />
+    <text x="330" y="32" text-anchor="middle" class="svg-label">event occurs</text>
+
+    <text x="16" y="96" text-anchor="start" class="svg-label small muted">short poll</text>
+    <line x1="150" y1="78" x2="150" y2="102" class="s-muted" stroke-width="1.5" />
+    <line x1="270" y1="78" x2="270" y2="102" class="s-muted" stroke-width="1.5" />
+    <line x1="510" y1="78" x2="510" y2="102" class="s-muted" stroke-width="1.5" />
+    <line x1="333" y1="90" x2="384" y2="90" class="s-danger" stroke-width="2" />
+    <circle cx="390" cy="90" r="7" class="f-ok" />
+    <line x1="390" y1="78" x2="390" y2="102" class="s-muted" stroke-width="1.5" />
+    <text x="340" y="120" text-anchor="start" class="svg-label small">waits for next poll</text>
+    <text x="210" y="72" text-anchor="middle" class="svg-label small muted">empty answers</text>
+
+    <text x="16" y="186" text-anchor="start" class="svg-label small muted">long poll</text>
+    <line x1="150" y1="180" x2="326" y2="180" class="s-muted" stroke-width="1.5" stroke-dasharray="3 4" />
+    <text x="238" y="168" text-anchor="middle" class="svg-label small muted">request held open</text>
+    <circle cx="330" cy="180" r="7" class="f-ok" />
+    <line x1="344" y1="180" x2="560" y2="180" class="s-muted" stroke-width="1.5" stroke-dasharray="3 4" />
+    <text x="452" y="168" text-anchor="middle" class="svg-label small muted">re-ask immediately</text>
+    <text x="344" y="206" text-anchor="start" class="svg-label small">instant response</text>
+
+    <text x="16" y="266" text-anchor="start" class="svg-label small muted">websocket</text>
+    <line x1="100" y1="260" x2="620" y2="260" class="s-accent" stroke-width="2" />
+    <text x="190" y="248" text-anchor="middle" class="svg-label small muted">persistent connection</text>
+    <circle cx="330" cy="260" r="7" class="f-ok" />
+    <text x="452" y="248" text-anchor="middle" class="svg-label small">frame pushed instantly</text>
+
+    <line x1="60" y1="304" x2="620" y2="304" class="s-muted" stroke-width="1.5" marker-end="url(#pw-arr)" />
+    <text x="600" y="324" text-anchor="middle" class="svg-label small muted">time</text>
+  </svg>
+</Diagram>
+
+## WebSockets: stop asking
+
+A WebSocket begins life as an ordinary HTTP GET carrying an `Upgrade: websocket` header. The server replies `101 Switching Protocols`, and from that moment the same TCP connection stops being HTTP: it becomes a persistent, full-duplex byte stream carrying framed messages in either direction, at any time, initiated by either side. The asymmetry that forced all the workarounds above is simply gone.
+
+The framing (RFC 6455) is where the overhead arithmetic flips. A WebSocket frame header is 2–14 bytes — 2 bytes for small server-sent payloads, plus 4 masking bytes on client-sent frames and a longer length field for big ones. Compare that to the 700-plus bytes of headers per HTTP poll cycle: pushing a 20-byte stock tick costs roughly 22 bytes on a WebSocket versus a thousand over polling — a 45x difference that compounds at every hop. This is why Discord's gateway, Slack's real-time messaging, Figma's multiplayer cursors, and essentially every trading front end run on WebSockets.
+
+The price is that you now own a connection. HTTP's reconnection story is "send another request"; WebSockets have none built in. Production clients must detect closure, reconnect with jittered exponential backoff, re-authenticate, and *resume* — which means the protocol on top needs sequence numbers so a resuming client can say "I last saw event 4,182" and replay the gap (Discord's gateway does exactly this). Both sides also need heartbeats — the protocol's ping/pong frames — because a silent connection is indistinguishable from a dead one, and NATs and load balancers reap idle flows after a few minutes.
+
+<Diagram caption="The upgrade handshake: one HTTP exchange converts the connection into a full-duplex frame stream.">
+  <svg viewBox="0 0 660 300" width="100%" role="img" aria-label="Sequence diagram: client sends GET with Upgrade websocket header, server replies 101 Switching Protocols, then frames flow both directions over the same TCP connection.">
+    <defs>
+      <marker id="ws-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-text" />
+      </marker>
+    </defs>
+    <rect x="70" y="20" width="140" height="40" rx="8" class="f-inset s-border" />
+    <text x="140" y="45" text-anchor="middle" class="svg-label">client</text>
+    <rect x="450" y="20" width="140" height="40" rx="8" class="f-inset s-border" />
+    <text x="520" y="45" text-anchor="middle" class="svg-label">server</text>
+    <line x1="140" y1="60" x2="140" y2="285" class="s-border" stroke-width="1.5" />
+    <line x1="520" y1="60" x2="520" y2="285" class="s-border" stroke-width="1.5" />
+
+    <line x1="140" y1="100" x2="514" y2="100" class="s-text" stroke-width="1.5" marker-end="url(#ws-arr)" />
+    <text x="330" y="90" text-anchor="middle" class="svg-label small">GET /socket + Upgrade: websocket</text>
+    <line x1="520" y1="140" x2="146" y2="140" class="s-text" stroke-width="1.5" marker-end="url(#ws-arr)" />
+    <text x="330" y="130" text-anchor="middle" class="svg-label small">101 Switching Protocols</text>
+
+    <rect x="150" y="165" width="360" height="105" rx="8" class="f-raised s-accent" stroke-dasharray="5 4" />
+    <text x="330" y="186" text-anchor="middle" class="svg-label small muted">same TCP connection, full-duplex</text>
+    <line x1="170" y1="212" x2="484" y2="212" class="s-text" stroke-width="1.5" marker-end="url(#ws-arr)" />
+    <text x="330" y="205" text-anchor="middle" class="svg-label small">frame (2-14 byte header)</text>
+    <line x1="490" y1="248" x2="176" y2="248" class="s-text" stroke-width="1.5" marker-end="url(#ws-arr)" />
+    <text x="330" y="241" text-anchor="middle" class="svg-label small">frame, anytime, either side</text>
+  </svg>
+</Diagram>
+
+## SSE: the one-way middle ground
+
+Server-Sent Events sit between the extremes: the client opens one long-lived HTTP response (`text/event-stream`) and the server writes events down it indefinitely. It is server-to-client only — client messages go out as ordinary separate requests — but for feeds, notifications, and token streams (ChatGPT streams completions over SSE) that is the whole job. The browser's `EventSource` API auto-reconnects and resends the last event ID for you, which is exactly the resume machinery you would otherwise hand-build on WebSockets. One caveat: over HTTP/1.1 browsers cap connections per origin at about six, so SSE realistically wants HTTP/2.
+
+| | Short polling | Long polling | SSE | WebSockets |
+|---|---|---|---|---|
+| Worst-case delivery latency | poll interval | ~one RTT | ~one RTT | ~one RTT |
+| Per-message overhead | 700+ bytes headers | 700+ bytes headers | ~tens of bytes | 2–14 bytes |
+| Idle cost | constant empty requests | one parked request/client | one open response/client | one socket + heartbeats |
+| Direction | client pulls | client pulls | server pushes | full duplex |
+| Reconnect story | none needed | built into the loop | automatic (EventSource) | hand-rolled: backoff + resume |
+
+The trade-offs are easiest to feel live. In the simulator below, drop the event rate to something sparse and watch the per-lane delivery latency: the WebSocket and long-poll lanes stay flat near zero while short polling's latency bounces around as events land mid-interval. Then crank the poll interval down and watch the wasted empty responses pile up in the counters — the cost of buying latency with request volume.
+
+<PollingWebSocketsSim client:visible />
+
+## Scaling the stateful fleet
+
+A polling fleet is operationally boring in the best way: every request is self-contained, so any server can answer it and the load balancer can spray traffic freely. A WebSocket fleet gives that up. Each connection is pinned to the specific node that accepted it, which changes four things:
+
+- **Load balancing.** The LB must tolerate connections that live for hours, and "balanced" now means balanced *connection counts*, not request counts. Draining a node for deploy means disconnecting everyone on it, not just waiting for in-flight requests.
+- **Fan-out.** To deliver an event to user X you must find the node holding X's socket. That means either a routing registry or a broadcast layer where every node subscribes to a pub/sub channel and forwards to its local sockets.
+- **Reconnect storms.** When a node holding 100,000 connections dies, 100,000 clients attempt TLS handshakes and auth simultaneously — a self-inflicted DDoS. Jittered exponential backoff on the client is not optional; it is the only thing spreading that spike.
+- **State on failover.** Everything the socket implied — subscriptions, presence, delivery cursors — evaporates with the node and must be re-established on resume, which is why the sequence-number protocol matters as much as the transport.
+
+Per-connection memory (kernel buffers, TLS state, application bookkeeping — tens of kilobytes each) plus file descriptor limits set the ceiling per node; a million idle connections is a real fleet, not a big box.
+
+## Pitfalls worth knowing
+
+- **Middleboxes.** Corporate proxies and older networks mishandle upgraded connections and kill long-idle ones. Always run WebSockets as `wss://` on port 443, and expect a small percentage of clients to need an HTTP fallback anyway — this is why Socket.IO famously starts with long polling and upgrades.
+- **The long-poll gap.** No buffering plus no cursor equals silent message loss between cycles. This bug ships constantly.
+- **Half-open sockets.** Skip heartbeats and you will happily "push" messages into connections that died twenty minutes ago.
+- **Timeout stacking.** A 60-second long poll behind a 30-second LB idle timeout returns spurious 504s. Every intermediary's timeout must exceed your hold time.
+
+## Choosing
+
+If updates are infrequent — a dashboard refreshing every 30–60 seconds, a job-status check — **short polling is the right answer**, not a naive one: it is stateless, cache-friendly, works everywhere, and needs zero new infrastructure. If the server streams and the client only listens (feeds, notifications, progress, LLM output), **SSE** gets you push semantics with HTTP's operational simplicity and free reconnection. Reach for **WebSockets** when you genuinely need both directions at low latency — chat, multiplayer, collaborative editing, live trading — and accept that you are signing up for heartbeats, resume protocols, fan-out plumbing, and reconnect-storm planning. **Long polling** today is mostly a compatibility fallback or a server-to-server API idiom (SQS-style waits) — but it is the mechanism to understand, because it teaches the core trick every push system uses: keep a question parked so the answer can leave immediately.

@@ -6,4 +6,150 @@ summary: "What an API actually is: the contract that lets two pieces of software
 order: 3
 resources: [apis-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+Two pieces of software written by different people, in different languages, deployed on different continents, still need to cooperate. The only way that works is a contract: a fixed, documented surface that one side promises to serve and the other side codes against. An API is that contract — and almost everything that goes wrong with APIs comes from treating it as an implementation detail instead of a promise.
+
+## Interface vs implementation
+
+The idea predates networks. A function signature is an API: callers depend on the name, parameters, and return type, and the body can be rewritten freely as long as those hold. A network API is the same separation with a wire in the middle — the contract is now URLs, methods, schemas, and status codes, and the implementation behind it can move from a Python monolith to a fleet of Go services without any client noticing. That decoupling is the entire value: it lets teams, companies, and release schedules vary independently on each side of the boundary.
+
+<Diagram caption="Clients bind to the contract, never the implementation — so the implementation can be replaced outright.">
+  <svg viewBox="0 0 640 240" width="100%" role="img" aria-label="A client box connects to a contract box listing operations, schemas, errors, pagination, rate limits, and compatibility rules; behind the contract, implementation v1 and a rewritten v2 are interchangeable.">
+    <defs>
+      <marker id="arr-api" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="20" y="95" width="120" height="50" rx="8" class="f-inset s-border" />
+    <text x="80" y="125" text-anchor="middle" class="svg-label">client</text>
+    <rect x="230" y="40" width="180" height="160" rx="8" class="f-inset s-accent" />
+    <text x="320" y="68" text-anchor="middle" class="svg-label">contract</text>
+    <text x="320" y="94" text-anchor="middle" class="svg-label small muted">operations</text>
+    <text x="320" y="113" text-anchor="middle" class="svg-label small muted">schemas</text>
+    <text x="320" y="132" text-anchor="middle" class="svg-label small muted">errors</text>
+    <text x="320" y="151" text-anchor="middle" class="svg-label small muted">pagination</text>
+    <text x="320" y="170" text-anchor="middle" class="svg-label small muted">rate limits</text>
+    <text x="320" y="189" text-anchor="middle" class="svg-label small muted">compat rules</text>
+    <rect x="485" y="55" width="135" height="50" rx="8" class="f-inset s-border" />
+    <text x="552" y="85" text-anchor="middle" class="svg-label">impl v1</text>
+    <rect x="485" y="140" width="135" height="50" rx="8" class="f-inset s-border" />
+    <text x="552" y="164" text-anchor="middle" class="svg-label">impl v2</text>
+    <text x="552" y="181" text-anchor="middle" class="svg-label small muted">full rewrite</text>
+    <line x1="144" y1="120" x2="226" y2="120" class="s-muted" stroke-width="1.5" marker-end="url(#arr-api)" />
+    <line x1="414" y1="80" x2="481" y2="80" class="s-muted" stroke-width="1.5" marker-end="url(#arr-api)" />
+    <line x1="414" y1="165" x2="481" y2="165" class="s-muted" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arr-api)" />
+  </svg>
+</Diagram>
+
+## Anatomy of a good contract
+
+A usable contract specifies far more than endpoints. Each piece removes a class of guesswork:
+
+- **Operations** — what you can do, and which calls are safe to retry. Read operations should be side-effect free; retryable writes need idempotency keys (the Idempotency page covers the mechanics).
+- **Schemas** — exact field names, types, nullability, and units. "amount" is ambiguous; "amount in minor currency units, integer" is a contract.
+- **Errors** — every failure mode a client must handle, with machine-readable codes.
+- **Pagination** — how large collections are traversed, guaranteed on every list endpoint.
+- **Rate limits** — the request budget, plus how the API says "slow down" (429 with a `Retry-After` header) so clients can back off instead of hammering.
+- **Compatibility rules** — which changes the provider may make without notice, and which require a new version.
+
+The transport style — REST conventions, gRPC, GraphQL — is a separate decision covered by the REST page and the API-styles comparison; every one of them still needs all six items above.
+
+## Error design
+
+A status code alone is not an error contract. `400 Bad Request` tells a client something failed; it does not say which field, why, or whether retrying helps. Good APIs pair the status code with a machine-readable body:
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "code": "amount_too_small",
+    "param": "amount",
+    "message": "Amount must be at least 50 cents.",
+    "doc_url": "https://docs.example.com/errors#amount_too_small"
+  }
+}
+```
+
+The status code routes coarse behavior (4xx: fix the request, except 429, which means back off; 5xx: retry with backoff), the `code` field drives programmatic handling, and the message is for humans and logs — never for `if` statements, because you will want to reword it later. RFC 9457 ("problem details") standardizes this shape if you would rather not invent one. The most common failures are returning 200 with an error buried in the body — which defeats every retry proxy and monitoring rule that keys on status — and stuffing prose into a single string that clients end up regex-matching.
+
+## Pagination
+
+Any endpoint that lists things needs pagination from day one, because retrofitting it is a breaking change. Two patterns dominate:
+
+| | Offset (`?offset=200&limit=100`) | Cursor (`?starting_after=obj_123`) |
+|---|---|---|
+| Mechanics | Skip N rows, return the next page | Return rows after an opaque position token |
+| Jump to page 47 | Yes | No — forward/backward only |
+| Stability under writes | Rows shift: items skipped or repeated | Stable — the cursor pins a position |
+| Cost on large tables | Degrades: the database still scans the skipped rows | Constant with an index on the sort key |
+| Typical use | Admin UIs, small static datasets | Feeds, sync jobs, anything large or live |
+
+<Diagram caption="A row inserted between page fetches makes offset pagination repeat data; a cursor pins the position and is unaffected.">
+  <svg viewBox="0 0 640 250" width="100%" role="img" aria-label="Two panels: with offset pagination, inserting row X shifts the list so page two repeats row C; with cursor pagination, page two starts after row C and returns D and E correctly.">
+    <text x="10" y="22" class="svg-label small muted">offset: page 1 returned A, B, C — then row X is inserted</text>
+    <rect x="10" y="36" width="48" height="36" rx="6" class="f-inset s-accent-2" />
+    <text x="34" y="59" text-anchor="middle" class="svg-label">X</text>
+    <rect x="64" y="36" width="48" height="36" rx="6" class="f-inset s-border" />
+    <text x="88" y="59" text-anchor="middle" class="svg-label">A</text>
+    <rect x="118" y="36" width="48" height="36" rx="6" class="f-inset s-border" />
+    <text x="142" y="59" text-anchor="middle" class="svg-label">B</text>
+    <rect x="172" y="36" width="48" height="36" rx="6" class="f-inset s-danger" />
+    <text x="196" y="59" text-anchor="middle" class="svg-label">C</text>
+    <rect x="226" y="36" width="48" height="36" rx="6" class="f-inset s-border" />
+    <text x="250" y="59" text-anchor="middle" class="svg-label">D</text>
+    <rect x="280" y="36" width="48" height="36" rx="6" class="f-inset s-border" />
+    <text x="304" y="59" text-anchor="middle" class="svg-label">E</text>
+    <text x="360" y="52" class="svg-label small muted">page 2 = offset 3</text>
+    <text x="360" y="70" class="svg-label small">returns C, D, E — C repeated</text>
+    <text x="196" y="95" text-anchor="middle" class="svg-label small muted">duplicate</text>
+    <text x="10" y="142" class="svg-label small muted">cursor: page 2 = "after C" — insert cannot shift it</text>
+    <rect x="10" y="156" width="48" height="36" rx="6" class="f-inset s-accent-2" />
+    <text x="34" y="179" text-anchor="middle" class="svg-label">X</text>
+    <rect x="64" y="156" width="48" height="36" rx="6" class="f-inset s-border" />
+    <text x="88" y="179" text-anchor="middle" class="svg-label">A</text>
+    <rect x="118" y="156" width="48" height="36" rx="6" class="f-inset s-border" />
+    <text x="142" y="179" text-anchor="middle" class="svg-label">B</text>
+    <rect x="172" y="156" width="48" height="36" rx="6" class="f-inset s-accent" />
+    <text x="196" y="179" text-anchor="middle" class="svg-label">C</text>
+    <rect x="226" y="156" width="48" height="36" rx="6" class="f-inset s-ok" />
+    <text x="250" y="179" text-anchor="middle" class="svg-label">D</text>
+    <rect x="280" y="156" width="48" height="36" rx="6" class="f-inset s-ok" />
+    <text x="304" y="179" text-anchor="middle" class="svg-label">E</text>
+    <text x="360" y="172" class="svg-label small muted">page 2 = after cursor C</text>
+    <text x="360" y="190" class="svg-label small">returns D, E — no drift</text>
+    <text x="196" y="215" text-anchor="middle" class="svg-label small muted">cursor</text>
+  </svg>
+</Diagram>
+
+Offset also rots at scale: `OFFSET 100000` forces the database to read and discard 100,000 rows to serve one page. Cursors dodge both problems, which is why Stripe, Slack, and Twitter's APIs are cursor-based. Keep the cursor opaque — a base64 token, not a visible ID — so you can change its encoding later.
+
+## Versioning and why breaking changes cost so much
+
+Hyrum's law: with enough users, every observable behavior of your API will be depended on by somebody — the field order, the exact error message, the undocumented timeout. So a "breaking change" is anything a client can observe, not just what you documented, and shipping one means coordinating a migration across code you do not control and cannot even see. For a public API that can take years: Stripe still serves API versions from the early 2010s.
+
+| Strategy | How | Trade-off |
+|---|---|---|
+| URL versioning | `/v2/orders` | Visible and cacheable, but v2 is a fork — every change now lands twice |
+| Header versioning | `Stripe-Version: 2024-06-20` per account | Clean URLs, per-client pinning; invisible in logs and curl unless you look |
+| Additive-only evolution | Never remove or change fields; only add optional ones | No version machinery at all, but the schema accretes forever and mistakes are permanent |
+
+Most durable APIs combine the last two: evolve additively by default, and reserve version bumps — pinned per client, defaulted for new signups — for the rare change that cannot be additive. Whatever you choose, publish the rules: clients must know that new optional fields may appear at any time, so their parsers must ignore unknown keys.
+
+## What separates great APIs from mediocre ones
+
+Stripe and Twilio are the usual quality bar, and the reason is boring discipline, not cleverness. Every Stripe list endpoint paginates identically; every object carries `id`, `object`, and `created`; every error follows one shape. That consistency means learning one endpoint teaches you all of them — the principle of least surprise applied ruthlessly. The second half is documentation as a first-class deliverable: an OpenAPI specification that is generated from (or validated against) the real implementation, runnable examples in several languages, and a changelog that treats every behavioral change as news. Stripe's published spec doubles as the source for its docs and client SDKs, so none of them can drift from reality.
+
+## Pitfalls
+
+- **Leaking internals.** Exposing database column names or internal enums welds your schema to your storage; renaming a column becomes a breaking API change.
+- **Errors as prose.** If the only signal is a message string, clients will parse it, and rewording it becomes a breaking change (Hyrum again).
+- **Offset pagination by default.** Fine at 1,000 rows, a duplicate-riddled table scan at 10 million.
+- **Booleans that should be enums.** `status: "pending"` can grow new states additively; `is_complete: false` cannot.
+- **Versioning as an afterthought.** If v1 shipped with no compatibility rules, every client assumption is now load-bearing.
+- **Undocumented limits.** Clients that never see a rate-limit contract discover it as a production outage.
+
+## When to invest
+
+Match the contract's rigor to the cost of changing it. A public API is effectively permanent — spec it first (OpenAPI), review the spec like code, and get pagination, error shapes, and compatibility rules right before the first external caller, because after that every fix is a migration. Internal service-to-service APIs deserve the same shapes but can version faster, since you can find and update every caller. The one habit that pays everywhere: design the contract before the implementation, and treat any observable change as a change to the contract — because to your clients, it is.

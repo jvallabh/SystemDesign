@@ -2,8 +2,131 @@
 title: "JWTs"
 category: communication-apis
 tier: written
-summary: "Self-contained signed tokens that let services verify identity without a shared session store."
+summary: "Self-contained signed tokens that let any service verify a caller's identity without a session-store lookup."
 order: 7
 resources: [jwts-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+Every authenticated request has to answer the same question: who is calling? The classic answer is an opaque session ID in a cookie, resolved by a lookup in a session store — which means a network hop on every request and a shared dependency for every service that needs to know who the user is. A JSON Web Token (JWT) moves the answer into the request itself: an auth server signs a small statement of identity, and any service holding the right key can verify that statement locally, without asking anyone.
+
+## Anatomy: header.payload.signature
+
+A JWT is three base64url-encoded segments joined by dots. The header names the signing algorithm, the payload carries the claims, and the signature covers the first two segments byte-for-byte (an RS256 signature runs about 342 base64url characters; truncated here):
+
+```text
+eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImtleS0yMDI2LTA3In0
+.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJ1c2VyLTQyIiwiYXVkIjoiYXBpLmV4YW1wbGUuY29tIiwiZXhwIjoxNzgzMTkwNDAwLCJpYXQiOjE3ODMxODk1MDB9
+.HrfPnQe0kkcK1FbcPq2S8vTL9dZ0jFmSGnWMyq4Bt3k...
+```
+
+Decoded, the header and payload are plain JSON:
+
+```json
+{ "alg": "RS256", "typ": "JWT", "kid": "key-2026-07" }
+
+{
+  "iss": "https://auth.example.com",
+  "sub": "user-42",
+  "aud": "api.example.com",
+  "exp": 1783190400,
+  "iat": 1783189500
+}
+```
+
+The registered claims do real work: `iss` says who minted the token, `sub` identifies the principal, `aud` says which service it is intended for (so a token for your billing API cannot be replayed against your admin API), `exp` and `iat` bound its lifetime. A typical token runs 300-1000 bytes — and it rides on every single request, which matters later.
+
+## Decoding is not verifying
+
+Base64url is an encoding, not encryption. Anyone who intercepts a JWT can paste it into a decoder and read every claim; the signature proves the token was issued by the key holder and has not been altered — it provides integrity and authenticity, never secrecy. Two consequences follow. First, never put secrets in the payload: no passwords, no PII you would not send in a plain header. Second, a service that merely decodes a token and trusts its claims will accept a forged one; verification means checking the signature against the expected key, then checking `exp`, `iss`, and `aud`. Most real-world JWT vulnerabilities are some version of skipping half of that list.
+
+## HS256 vs RS256
+
+HS256 signs with HMAC-SHA256 over a shared secret: the same key signs and verifies. That is fine inside one trust boundary — a monolith, or two services owned by the same team — but every service that can verify can also mint valid tokens, so a compromise of any verifier compromises the issuer.
+
+RS256 (and its faster elliptic-curve sibling ES256) splits the roles: the auth server signs with a private key, and everyone else verifies with the public key, typically fetched from a published JWKS endpoint and cached. Fifty microservices — or third parties entirely, as with Google and Auth0 identity tokens — can verify without any of them being able to forge. The `kid` header field names which key signed the token, which is what makes key rotation routine instead of an outage.
+
+<Diagram caption="Asymmetric signing: only the auth service can mint tokens, but every service verifies locally — no per-request call to the issuer.">
+  <svg viewBox="0 0 640 260" width="100%" role="img" aria-label="A client logs in to an auth service and receives a signed JWT. The client then sends requests carrying the JWT to an orders service and a billing service, each of which verifies the signature locally using the auth service's public key.">
+    <defs>
+      <marker id="jwt-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="50" y="15" width="180" height="50" rx="8" class="f-inset s-accent" />
+    <text x="140" y="38" text-anchor="middle" class="svg-label">auth service</text>
+    <text x="140" y="56" text-anchor="middle" class="svg-label small muted">signs with private key</text>
+    <rect x="50" y="160" width="180" height="50" rx="8" class="f-inset s-border" />
+    <text x="140" y="190" text-anchor="middle" class="svg-label">client</text>
+    <line x1="105" y1="158" x2="105" y2="70" class="s-muted" stroke-width="1.5" marker-end="url(#jwt-arr)" />
+    <text x="96" y="120" text-anchor="end" class="svg-label small muted">1. login</text>
+    <line x1="175" y1="70" x2="175" y2="156" class="s-muted" stroke-width="1.5" marker-end="url(#jwt-arr)" />
+    <text x="184" y="120" class="svg-label small">2. signed JWT</text>
+    <rect x="430" y="115" width="190" height="50" rx="8" class="f-inset s-border" />
+    <text x="525" y="138" text-anchor="middle" class="svg-label">orders service</text>
+    <text x="525" y="155" text-anchor="middle" class="svg-label small muted">verifies: public key</text>
+    <rect x="430" y="195" width="190" height="50" rx="8" class="f-inset s-border" />
+    <text x="525" y="218" text-anchor="middle" class="svg-label">billing service</text>
+    <text x="525" y="235" text-anchor="middle" class="svg-label small muted">verifies: public key</text>
+    <line x1="234" y1="172" x2="426" y2="142" class="s-muted" stroke-width="1.5" marker-end="url(#jwt-arr)" />
+    <line x1="234" y1="198" x2="426" y2="218" class="s-muted" stroke-width="1.5" marker-end="url(#jwt-arr)" />
+    <text x="330" y="147" text-anchor="middle" class="svg-label small">3. request + JWT</text>
+  </svg>
+</Diagram>
+
+## Sessions vs JWTs
+
+The stateless-verification property is the whole reason JWTs scale horizontally: any of a hundred instances behind a load balancer can validate a request with a few microseconds of CPU, with no sticky sessions and no round trip to a shared Redis on every call — a trip that costs around a millisecond and adds a stateful system that can fail. The direct comparison:
+
+| | Server-side sessions | JWTs |
+|---|---|---|
+| Where state lives | Session store (Redis, DB) | Inside the token |
+| Per-request cost | Store lookup, about 1ms | Local signature check, microseconds |
+| Revocation | Instant — delete the row | Hard — valid until `exp` |
+| Cross-service auth | Every service needs store access | Any service with the public key |
+| Bytes per request | Cookie of about 32 bytes | 300-1000+ bytes |
+| Operational surface | One more stateful system to run | Key distribution and rotation |
+
+## The revocation problem
+
+A signed token is a bearer credential that stays valid until `exp`, no matter what happens in between — logout, password change, account compromise. The issuer cannot recall it, because recalling it would require exactly the central lookup JWTs were built to avoid.
+
+The standard mitigation is to make access tokens short-lived (5-15 minutes) and pair them with a long-lived refresh token that *is* tracked server-side. Revocation then means deleting the refresh token: the attacker's stolen access token dies within minutes, and the lookup cost is paid once per refresh instead of once per request. For systems that need faster revocation, a denylist of revoked token IDs (`jti`) held until their natural expiry works too — it reintroduces a lookup, but the list is tiny and cache-friendly because it only contains revoked tokens.
+
+<Diagram caption="The refresh flow: short-lived access tokens keep verification stateless; the long-lived refresh token is the revocable handle.">
+  <svg viewBox="0 0 640 250" width="100%" role="img" aria-label="Sequence diagram between a client and an auth server: the client logs in, receives a 15-minute access token and a long-lived refresh token, uses the access token until it expires, then presents the refresh token to obtain a new access token; the refresh step is where revocation is checked.">
+    <defs>
+      <marker id="jwt-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="70" y="10" width="140" height="40" rx="8" class="f-inset s-border" />
+    <text x="140" y="35" text-anchor="middle" class="svg-label">client</text>
+    <rect x="430" y="10" width="140" height="40" rx="8" class="f-inset s-border" />
+    <text x="500" y="35" text-anchor="middle" class="svg-label">auth server</text>
+    <line x1="140" y1="52" x2="140" y2="240" class="s-border" stroke-dasharray="4 4" />
+    <line x1="500" y1="52" x2="500" y2="240" class="s-border" stroke-dasharray="4 4" />
+    <line x1="144" y1="80" x2="496" y2="80" class="s-muted" stroke-width="1.5" marker-end="url(#jwt-arr2)" />
+    <text x="320" y="72" text-anchor="middle" class="svg-label small">login (credentials)</text>
+    <line x1="496" y1="115" x2="144" y2="115" class="s-muted" stroke-width="1.5" marker-end="url(#jwt-arr2)" />
+    <text x="320" y="107" text-anchor="middle" class="svg-label small">access token (15 min) + refresh token (days)</text>
+    <text x="320" y="150" text-anchor="middle" class="svg-label small muted">... API calls verified statelessly until expiry ...</text>
+    <line x1="144" y1="185" x2="496" y2="185" class="s-muted" stroke-width="1.5" marker-end="url(#jwt-arr2)" />
+    <text x="320" y="177" text-anchor="middle" class="svg-label small">refresh token</text>
+    <line x1="496" y1="220" x2="144" y2="220" class="s-muted" stroke-width="1.5" marker-end="url(#jwt-arr2)" />
+    <text x="320" y="212" text-anchor="middle" class="svg-label small">new access token — revocation checked here</text>
+  </svg>
+</Diagram>
+
+## Classic attacks and pitfalls
+
+- **`alg: none`.** The spec includes an unsigned mode, and early libraries honored it during verification — so an attacker could strip the signature, set the algorithm to `none`, and be believed. Modern libraries reject it, but the lesson generalizes: the verifier, not the token, must pin the list of acceptable algorithms.
+- **Algorithm confusion.** A verifier configured with an RSA public key but willing to accept HS256 can be fed a token HMAC-signed *with that public key as the secret* — public keys are public, so the attacker has everything needed. Pin one algorithm per key.
+- **Tokens in localStorage.** Any XSS payload can read localStorage and exfiltrate the token. An httpOnly cookie cannot be read by injected script; it trades that for CSRF exposure, which SameSite attributes largely handle.
+- **Oversized tokens.** Teams stuff roles, permissions, and profile data into claims until the token hits several kilobytes — paid on every request, and eventually bounced by proxies with 8KB header limits. Keep claims to identity and coarse scopes; fetch the rest.
+- **Clock skew.** `exp` and `iat` are checked against the verifier's clock, not the issuer's. Machines drift; allow 30-60 seconds of leeway and run NTP, or freshly minted tokens will be rejected as "not yet valid" on a slow clock.
+
+## When to reach for it
+
+Use JWTs when multiple services — or multiple organizations — need to verify identity without sharing a session store: microservice fleets, public APIs, federated login (OIDC ID tokens are JWTs). Default to RS256/ES256 with short-lived access tokens and server-tracked refresh tokens, and pin the algorithm. If you run a monolith that already has Redis a millisecond away, plain sessions are simpler, revoke instantly, and put 30 bytes on the wire instead of 800 — a JWT there is complexity without the payoff.
