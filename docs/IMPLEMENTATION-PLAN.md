@@ -13,23 +13,25 @@ Phased build plan for System Design Atlas. Each phase ends with a deployed, full
 
 ## Phases 2–7 — Content waves (one per category)
 
-Each wave fills every topic page in one category: original explanation, static SVG diagrams (`Diagram` component, CSS-variable colors), a "Further learning" section, and the category's flagship simulations. Suggested order front-loads the most sim-heavy, highest-traffic categories:
+Each wave fills every topic page in one category: original explanation, static SVG diagrams (`Diagram` component, theme-aware color classes), a "Further learning" section, and the category's flagship simulations. Suggested order front-loads the most sim-heavy, highest-traffic categories:
 
 | Phase | Category | Written pages | Simulations |
 |---|---|---|---|
-| 2 | Caching | CDN | CachingSim (strategy + eviction toggles, hit-rate readout), BloomFiltersSim (insert/query, false-positive hunt) |
-| 3 | Scalability | Availability, Proxy vs Reverse Proxy, Stateful vs Stateless | LoadBalancingSim (strategy race, click-to-kill servers), RateLimitingSim (4 algorithms, burst button), ScalingSim (vertical vs horizontal breaking points) |
-| 4 | Distributed Systems Theory | Distributed Algorithms, Idempotency, Concurrency vs Parallelism | CapTheoremSim (partition a 3-node cluster), ConsistentHashingSim (ring, vnode slider, % keys remapped) |
+| 2 ✅ (2026-07-10) | Caching | CDN | CachingSim (strategy + eviction toggles, hit-rate readout), BloomFiltersSim (insert/query, false-positive hunt) |
+| 3 ✅ (2026-07-10) | Scalability | Availability, Proxy vs Reverse Proxy, Stateful vs Stateless | LoadBalancingSim (strategy race, click-to-kill servers), RateLimitingSim (4 algorithms, burst button), ScalingSim (vertical vs horizontal breaking points) |
+| 4 ✅ (2026-07-11) | Distributed Systems Theory | Distributed Algorithms, Idempotency, Concurrency vs Parallelism | CapTheoremSim (partition a 3-node cluster), ConsistentHashingSim (ring, vnode slider, % keys remapped) |
 | 5 | Data & Storage | Databases, ACID Transactions, CDC | SqlNosqlSim (data-shape/query-pattern explorer), ShardingSim (range vs hash, hot shards, resharding) |
 | 6 | Communication & APIs | APIs, REST, Webhooks, API Gateways, JWTs | ApiStylesSim (REST/gRPC/GraphQL/tRPC trade-off explorer), PollingWebSocketsSim (latency + overhead comparison) |
 | 7 | Architecture Patterns | Services, Sync vs Async, Batch vs Stream | MessageQueuesSim (producer/consumer backpressure) |
+
+Head start on phase 5: `SqlNosqlSim.tsx` and `ShardingSim.tsx` are already checked in (built during an interrupted run) — the wave should audit and review them rather than rebuild.
 
 **Definition of done per topic page**
 - Written tier: original explanation (~600–1200 words), ≥1 static SVG diagram, real-world examples, further-learning links
 - Flagship tier: all of the above plus a working simulation following the `SmokeTestSim` pattern, embedded `client:visible`
 - Build passes; no un-prefixed internal links; both themes render correctly
 
-**Open item:** the source links for CDC, Caching, Caching Strategies, Cache Eviction Policies, and CDN were YouTube search queries — pick real replacement resources during phases 2 and 5.
+**Open item (resolved 2026-07-10):** the source links for CDC, Caching, Caching Strategies, Cache Eviction Policies, and CDN were YouTube search queries — replaced with hand-curated resources in `resources.json` (AWS/web.dev for CDN, Confluent/Red Hat for CDC, CodeAhoy/AWS whitepaper for caching strategies).
 
 ## Phase 8 — Polish pass
 

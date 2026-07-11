@@ -376,6 +376,14 @@ export default function ConsistentHashingSim() {
           className="s-muted"
           opacity={0.6}
         />
+        <text
+          x={evenX}
+          y={chartTop + w.nodes.length * rowH + 2}
+          textAnchor="middle"
+          className="svg-label small muted"
+        >
+          even
+        </text>
         {w.nodes.map((n, i) => {
           const count = counts.get(n.id) ?? 0;
           const width = (count / maxCount) * barW;

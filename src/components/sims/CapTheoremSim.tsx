@@ -413,11 +413,11 @@ export default function CapTheoremSim() {
         })}
 
         {/* Post-heal sync animation: pulses streaming into N3 + a fading ring */}
-        {w.sync &&
+        {sync &&
           [0, 1].map((from) =>
             [0, 0.5].map((off) => {
               const pts = linkPts(from, 2);
-              const q = ((w.sync as { t: number }).t / 300 + off) % 1;
+              const q = (sync.t / 300 + off) % 1;
               return (
                 <circle
                   key={`s${from}-${off}`}
@@ -429,7 +429,7 @@ export default function CapTheoremSim() {
               );
             }),
           )}
-        {w.sync && (
+        {sync && (
           <circle
             cx={NODES[2].x}
             cy={NODES[2].y}

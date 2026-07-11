@@ -7,4 +7,144 @@ order: 2
 sim: ConsistentHashingSim
 resources: [consistent-hashing-video]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+import ConsistentHashingSim from '../../../components/sims/ConsistentHashingSim';
+
+Any system that spreads keys across servers — a cache tier, a partitioned datastore, a stateful load balancer — needs a function that maps a key to a node. The obvious function, `hash(key) mod N`, has a hidden failure mode: it bakes the cluster size into every key's address. Consistent hashing exists to break that dependency, so the cluster can grow, shrink, and lose machines without reshuffling the world.
+
+## The mod-N trap, quantified
+
+With `hash(key) mod N`, a key stays put only if its hash gives the same remainder under both the old and new modulus. Grow a cluster from 10 nodes to 11 and that holds for roughly 1 key in 11 — about **91% of keys move**. Shrink from 100 to 99 and about 99% move.
+
+For a database that means a near-total rebalance: terabytes of data streaming between nodes because you added one machine. For a cache it's worse, because the effect is instant. A memcached fleet at a 95% hit rate serving 500k requests/second sends 25k/second to the database. The moment N changes, ~91% of lookups probe the wrong server, hit rate collapses toward zero, and the database absorbs a 20x traffic spike — a self-inflicted thundering herd, triggered by a routine capacity add.
+
+The ideal is obvious once stated: adding one node to an N-node cluster should move only the keys that node will now own — about **K/(N+1) of them** (roughly 9% going from 10 nodes to 11), and no others. That is exactly what consistent hashing delivers.
+
+## The ring
+
+Consistent hashing hashes **both keys and nodes** into the same space — think of the output range of a 32- or 64-bit hash bent into a circle, 0 to 2^32 with the ends joined. Each node hashes its identifier (say, `10.0.3.7:6379`) to claim a position on the ring. To place a key, hash it to a point on the ring and walk **clockwise**: the first node you meet owns the key.
+
+<Diagram caption="Keys and nodes hash onto the same ring; each key belongs to the first node clockwise from its position.">
+  <svg viewBox="0 0 640 320" width="100%" role="img" aria-label="A hash ring with nodes A, B, and C. Key k1 hashes between A and B and walks clockwise to B; key k2 hashes between B and C and walks clockwise to C.">
+    <defs>
+      <marker id="ring-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-accent" />
+      </marker>
+    </defs>
+    <circle cx="240" cy="160" r="110" fill="none" class="s-border" stroke-width="2" />
+    <text x="240" y="152" text-anchor="middle" class="svg-label muted small">hash space</text>
+    <text x="240" y="172" text-anchor="middle" class="svg-label muted small">0 to 2^32, wrapped</text>
+    <circle cx="240" cy="50" r="10" class="f-accent" />
+    <text x="240" y="28" text-anchor="middle" class="svg-label">node A</text>
+    <circle cx="335" cy="215" r="10" class="f-accent" />
+    <text x="392" y="238" text-anchor="middle" class="svg-label">node B</text>
+    <circle cx="145" cy="215" r="10" class="f-accent" />
+    <text x="92" y="242" text-anchor="middle" class="svg-label">node C</text>
+    <rect x="329" y="99" width="12" height="12" class="f-accent-2" />
+    <text x="388" y="88" text-anchor="middle" class="svg-label small">key k1</text>
+    <rect x="196" y="257" width="12" height="12" class="f-accent-2" />
+    <text x="228" y="294" text-anchor="middle" class="svg-label small">key k2</text>
+    <path d="M 352 118 A 124 124 0 0 1 355 202" fill="none" class="s-accent" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ring-arrow)" />
+    <path d="M 186 274 A 124 124 0 0 1 138 238" fill="none" class="s-accent" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ring-arrow)" />
+    <text x="452" y="120" class="svg-label small muted">hash(key) picks a point;</text>
+    <text x="452" y="140" class="svg-label small muted">owner = next node</text>
+    <text x="452" y="160" class="svg-label small muted">clockwise</text>
+    <text x="452" y="192" class="svg-label small">k1 goes to B, k2 to C</text>
+  </svg>
+</Diagram>
+
+Now watch what membership changes cost. Add a node D that hashes between A and B: D takes over exactly the arc between A and D — keys that used to belong to B — and nothing else. Every other key on the ring is untouched, because its clockwise walk still ends at the same node. Remove a node and its arc spills onto its clockwise successor; again, no other key moves. In expectation each change remaps **K/N keys**, the theoretical minimum.
+
+Lookups stay cheap. Store the node positions in a sorted array; finding a key's successor is a binary search — a few hundred nanoseconds even with thousands of ring positions, done client-side with no coordination.
+
+This is a mechanism you should feel, not just read. In the simulator below, try three experiments: **remove a node** and check what fraction of keys actually remapped (it should hover near 1/N, not 90%); **drop virtual nodes to 1** and watch per-node load skew explode; and **toggle mod-N mode**, then remove the same node, to see the naive disaster side by side.
+
+<ConsistentHashingSim client:visible />
+
+## Virtual nodes: fixing the variance
+
+One position per node has an ugly statistical problem. Random points on a circle carve it into wildly uneven arcs: with N nodes, the largest arc is on the order of ln(N)/N — a factor of ln(N) above the mean. At N=10, expect some node to own **2–3x its fair share** of the keyspace while another owns a sliver. And when a node dies, its entire arc lands on one successor, doubling that neighbor's load at the worst possible moment.
+
+The fix is **virtual nodes** (vnodes): each physical node hashes V different identifiers (`node-a#1`, `node-a#2`, …) and claims V scattered positions. A node's share is now the sum of V small arcs, and averaging works for you — the relative spread of per-node load shrinks like 1/sqrt(V). At V=1 a node might carry 200% of average; at V=100 the standard deviation is around 10%; at V=1000, about 3%. Vnodes also buy two things for free:
+
+- **Heterogeneous capacity.** Give a machine with twice the RAM twice the vnodes and it draws twice the keys. No special-case logic.
+- **Diffuse failure.** A dead node's V arcs scatter across many successors, so its load spreads over the whole cluster instead of crushing one neighbor.
+
+The cost is metadata: the ring holds N x V entries that every client or gossip round must carry, and operations that iterate ring ranges (repair, rebalance bookkeeping) slow down as V grows. Cassandra shipped with 256 vnodes per node and later cut the default to 16, compensating with a smarter token-allocation algorithm — a hint that V is a tuning knob, not a bigger-is-better dial.
+
+## Replication: walk the ring further
+
+Durable stores can't put a key on one node. The ring gives replication a natural rule: a key's R replicas live on the **next R distinct physical nodes clockwise** from its position. "Distinct" is doing real work — with vnodes, consecutive ring positions often belong to the same machine, so the walk skips any physical node already picked. Production systems extend the same skip rule to fault domains: Cassandra's network topology strategy keeps walking until replicas land in different racks or availability zones, and Dynamo calls the resulting node list the key's *preference list*.
+
+<Diagram caption="Unrolled ring with vnodes: node A owns positions A1–A3. A key's replicas are the next R distinct physical nodes clockwise; A2 is skipped because A already holds a replica.">
+  <svg viewBox="0 0 640 200" width="100%" role="img" aria-label="A ring unrolled into a line with vnode positions B2, A1, C1, A2, B1, C2, A3. A key hashes before A1; replica walk selects A1, C1, then skips A2 and selects B1.">
+    <defs>
+      <marker id="walk-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-accent" />
+      </marker>
+    </defs>
+    <line x1="30" y1="140" x2="606" y2="140" class="s-border" stroke-width="2" />
+    <circle cx="90" cy="140" r="7" fill="none" class="s-muted" stroke-width="2" />
+    <circle cx="170" cy="140" r="7" class="f-accent" />
+    <circle cx="250" cy="140" r="7" class="f-accent" />
+    <circle cx="330" cy="140" r="7" class="f-muted" />
+    <circle cx="410" cy="140" r="7" class="f-accent" />
+    <circle cx="490" cy="140" r="7" fill="none" class="s-muted" stroke-width="2" />
+    <circle cx="570" cy="140" r="7" fill="none" class="s-muted" stroke-width="2" />
+    <text x="90" y="165" text-anchor="middle" class="svg-label small">B2</text>
+    <text x="170" y="165" text-anchor="middle" class="svg-label small">A1</text>
+    <text x="250" y="165" text-anchor="middle" class="svg-label small">C1</text>
+    <text x="330" y="165" text-anchor="middle" class="svg-label small">A2</text>
+    <text x="410" y="165" text-anchor="middle" class="svg-label small">B1</text>
+    <text x="490" y="165" text-anchor="middle" class="svg-label small">C2</text>
+    <text x="570" y="165" text-anchor="middle" class="svg-label small">A3</text>
+    <text x="170" y="186" text-anchor="middle" class="svg-label small muted">replica 1</text>
+    <text x="250" y="186" text-anchor="middle" class="svg-label small muted">replica 2</text>
+    <text x="330" y="186" text-anchor="middle" class="svg-label small muted">skip (A)</text>
+    <text x="410" y="186" text-anchor="middle" class="svg-label small muted">replica 3</text>
+    <rect x="124" y="76" width="12" height="12" class="f-accent-2" />
+    <text x="130" y="66" text-anchor="middle" class="svg-label small">key k</text>
+    <line x1="130" y1="92" x2="130" y2="128" class="s-muted" stroke-width="2" stroke-dasharray="4 3" />
+    <path d="M 136 122 Q 152 100 164 126" fill="none" class="s-accent" stroke-width="2" marker-end="url(#walk-arrow)" />
+    <path d="M 178 124 Q 210 92 244 126" fill="none" class="s-accent" stroke-width="2" marker-end="url(#walk-arrow)" />
+    <path d="M 258 124 Q 330 76 404 126" fill="none" class="s-accent" stroke-width="2" marker-end="url(#walk-arrow)" />
+    <text x="152" y="94" text-anchor="middle" class="svg-label small muted">1</text>
+    <text x="212" y="88" text-anchor="middle" class="svg-label small muted">2</text>
+    <text x="332" y="72" text-anchor="middle" class="svg-label small muted">3</text>
+  </svg>
+</Diagram>
+
+## Where it runs
+
+The idea comes from Karger et al.'s 1997 paper, written for web caching at what became Akamai. The systems that made it famous:
+
+- **Amazon Dynamo** (2007) built its whole partitioning story on a vnode ring with preference-list replication; **Cassandra**, **ScyllaDB**, and **Riak** inherited the token-ring design.
+- **Memcached clients** — memcached servers know nothing about each other, so the *client library* runs the ring. The ketama algorithm (last.fm, 2007) is the classic implementation and still ships in most memcached and Redis client libraries.
+- **Cache-affinity load balancing** — Envoy and nginx offer ring-hash upstream selection so requests for the same key keep landing on the same backend, preserving its local cache. The broader routing-algorithm menu belongs to the Load Balancing topic.
+
+## Refinements: bounded loads and rendezvous
+
+Plain consistent hashing balances *key counts*, not *load* — one celebrity key can still melt its node. **Bounded-load consistent hashing** (Mirrokni, Thorup, Zadimoghaddam, 2016) adds a cap: no node may exceed c times the average load (c ≈ 1.25 is typical); a request that would overflow a node spills to the next node clockwise. Vimeo used it to fix hot-video skew in its caching tier, and it ships in HAProxy as `hash-balance-factor`.
+
+**Rendezvous hashing** (highest random weight, 1996 — it actually predates the ring) skips the ring entirely: for each key, compute `hash(key, node)` for every node and pick the maximum. Same minimal-remap property, near-perfect balance with no vnodes, and trivially simple — but each lookup is O(N), so it fits best when N is small: picking among a handful of cache shards or availability zones rather than thousands of ring positions.
+
+| Strategy | Keys moved on join/leave | Lookup cost | Balance quality |
+|---|---|---|---|
+| `hash(key) mod N` | nearly all (~91% at N=10) | O(1) | perfect until N changes |
+| Ring, 1 token/node | ~K/N | O(log N) | poor — worst arc 2–3x mean |
+| Ring + V vnodes | ~K/N | O(log NV) | spread shrinks like 1/sqrt(V) |
+| Bounded-load ring | ~K/N | O(log NV) | hard cap at c times mean |
+| Rendezvous (HRW) | ~K/N | O(N) per key | excellent, no vnodes needed |
+
+## Trade-offs and pitfalls
+
+- **K/N is still data.** "Only" 1/N of keys moving is 200 GB when a 20-node cluster holds 4 TB. Consistent hashing minimizes remapping; it doesn't make rebalancing free. Throttle the transfer streams.
+- **Hash quality matters.** The scheme assumes uniform hashes. Use a fast, well-mixed function (Murmur3, xxHash) on the full key — a weak hash recreates the very skew vnodes exist to fix.
+- **Balance is statistical, not guaranteed.** Even with generous vnodes, expect a few percent of spread — and hot keys ignore key-count balance entirely. If a single key dominates traffic, reach for bounded loads or a front cache; the ring alone won't save you.
+- **Vnode count is a real trade-off.** More vnodes mean smoother balance but more ring metadata, chattier membership gossip, and more, smaller transfer streams during rebuilds.
+- **Clients must agree.** With client-side rings (ketama-style), every client needs the same node list and hash function. Two clients with different views silently write the same key to different servers.
+
+## When to reach for it
+
+Use consistent hashing whenever node membership changes while the system is live and remapping keys has a real cost — cache misses, data movement, lost session affinity. That covers distributed caches, partitioned stateful stores, and sticky request routing; whether to hash-partition at all (versus range partitioning) is the Sharding and Partitioning topic's question. Default to a vnode ring; add bounded loads when hot keys skew traffic. If your node set is small and changes are rare, rendezvous hashing is simpler with the same guarantees. And if N is genuinely fixed, changed only in planned maintenance with a full rebuild, plain mod-N is honestly fine. The moment "add a node" becomes a routine operation instead of an event, it isn't.

@@ -6,4 +6,129 @@ summary: "Dealing with many things at once vs doing many things at once — and 
 order: 5
 resources: [concurrency-parallelism-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+A server juggling ten thousand open connections and a job multiplying two enormous matrices both "do many things at once" — yet they are bottlenecked in opposite ways and want opposite designs. Engineers who conflate concurrency and parallelism reach for threads when they need an event loop, or spin up an event loop when they need more cores. The distinction is the first fork in the road for almost every performance decision, from a single request handler to a fleet of machines.
+
+## Structure vs execution: Pike's distinction
+
+Rob Pike's formulation is the crispest one: **concurrency is dealing with many things at once; parallelism is doing many things at once.** Concurrency is a property of your program's *structure* — it is composed of independently progressing tasks that can be interleaved. Parallelism is a property of *execution* — at a given instant, more than one computation is physically running on more than one processor.
+
+The two are orthogonal, and two examples pin down each corner:
+
+- **Concurrent, not parallel:** a single-core machine running an event loop. Node.js on one core can hold 10,000 open sockets, interleaving work as each connection becomes readable. Only one instruction stream ever executes, but the program is structured around many simultaneous concerns.
+- **Parallel, barely concurrent:** a GPU matrix multiply. Thousands of cores execute the same operation on different tiles of the matrix in lockstep. Enormous parallelism, but there is essentially one "thing" being dealt with — no independent tasks, no interleaving, no coordination logic.
+
+<Diagram caption="Concurrency interleaves tasks on one core; parallelism runs tasks simultaneously on several.">
+  <svg viewBox="0 0 640 310" width="100%" role="img" aria-label="Timeline diagram: one core interleaving tasks A, B, and C over time versus three cores each running one task for the whole duration">
+    <defs>
+      <marker id="cvp-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" class="f-muted" />
+      </marker>
+    </defs>
+    <text x="110" y="28" class="svg-label">concurrency — one core, interleaved</text>
+    <text x="70" y="72" text-anchor="end" class="svg-label small muted">core 1</text>
+    <rect x="90" y="52" width="88" height="30" rx="4" class="f-accent-dim s-accent" />
+    <text x="134" y="72" text-anchor="middle" class="svg-label small">task A</text>
+    <rect x="182" y="52" width="88" height="30" rx="4" class="f-inset s-accent-2" />
+    <text x="226" y="72" text-anchor="middle" class="svg-label small">task B</text>
+    <rect x="274" y="52" width="88" height="30" rx="4" class="f-accent-dim s-accent" />
+    <text x="318" y="72" text-anchor="middle" class="svg-label small">task A</text>
+    <rect x="366" y="52" width="88" height="30" rx="4" class="f-raised s-border" />
+    <text x="410" y="72" text-anchor="middle" class="svg-label small">task C</text>
+    <rect x="458" y="52" width="88" height="30" rx="4" class="f-inset s-accent-2" />
+    <text x="502" y="72" text-anchor="middle" class="svg-label small">task B</text>
+    <rect x="550" y="52" width="70" height="30" rx="4" class="f-accent-dim s-accent" />
+    <text x="585" y="72" text-anchor="middle" class="svg-label small">task A</text>
+    <text x="110" y="140" class="svg-label">parallelism — three cores, simultaneous</text>
+    <text x="70" y="184" text-anchor="end" class="svg-label small muted">core 1</text>
+    <rect x="90" y="164" width="530" height="30" rx="4" class="f-accent-dim s-accent" />
+    <text x="355" y="184" text-anchor="middle" class="svg-label small">task A</text>
+    <text x="70" y="226" text-anchor="end" class="svg-label small muted">core 2</text>
+    <rect x="90" y="206" width="530" height="30" rx="4" class="f-inset s-accent-2" />
+    <text x="355" y="226" text-anchor="middle" class="svg-label small">task B</text>
+    <text x="70" y="268" text-anchor="end" class="svg-label small muted">core 3</text>
+    <rect x="90" y="248" width="530" height="30" rx="4" class="f-raised s-border" />
+    <text x="355" y="268" text-anchor="middle" class="svg-label small">task C</text>
+    <line x1="90" y1="296" x2="620" y2="296" class="s-muted" stroke-width="1.5" marker-end="url(#cvp-arrow)" />
+    <text x="355" y="292" text-anchor="middle" class="svg-label small muted">time</text>
+  </svg>
+</Diagram>
+
+## The decision rule: what is your bottleneck waiting on?
+
+The distinction matters because the fix for a slow system depends on *why* it is slow.
+
+| | I/O-bound work | CPU-bound work |
+|---|---|---|
+| Time is spent | waiting — network, disk, another service | computing — the CPU is pinned |
+| What helps | concurrency: overlap the waits | parallelism: more cores or machines |
+| Mechanisms | event loop, async/await, non-blocking I/O | threads, processes, worker pools, scale-out |
+| More cores? | barely helps | roughly linear speedup |
+| Examples | API gateways, proxies, chat servers | video encoding, ML inference, compression |
+
+The intuition comes from the latency gap. A CPU executes an instruction in well under a nanosecond; a RAM access costs around 100 ns; an SSD read around 100 µs; a same-datacenter network round trip 500 µs or more. A request handler that calls a database spends 99%+ of its wall-clock time doing *nothing*. Parking that wait costs almost nothing if you do it right — which is the entire trick behind concurrency.
+
+This is why **single-threaded Redis and Node.js are fast**. Redis serves hundreds of thousands of operations per second from one thread because each command touches in-memory data for microseconds; the expensive part is network I/O, which the event loop multiplexes across thousands of sockets via `epoll`. One thread also means no locks, no cross-thread context switching, and trivially atomic commands. The design stops working the moment a single command becomes CPU-heavy — a `KEYS *` scan over millions of keys blocks *every* client, which is exactly the failure mode the decision rule predicts.
+
+<Diagram caption="An event loop: one thread dispatches ready events and parks I/O with the kernel instead of blocking on it.">
+  <svg viewBox="0 0 640 270" width="100%" role="img" aria-label="Flow diagram: clients feed an event queue, a single-threaded event loop pops events, runs handlers, hands I/O to the kernel, and completions re-enter the queue">
+    <defs>
+      <marker id="cvp-arrow2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="15" y="85" width="100" height="54" rx="8" class="f-inset s-border" />
+    <text x="65" y="117" text-anchor="middle" class="svg-label">clients</text>
+    <line x1="115" y1="112" x2="155" y2="112" class="s-muted" stroke-width="1.5" marker-end="url(#cvp-arrow2)" />
+    <rect x="160" y="85" width="130" height="54" rx="8" class="f-inset s-border" />
+    <text x="225" y="117" text-anchor="middle" class="svg-label">event queue</text>
+    <line x1="290" y1="112" x2="350" y2="112" class="s-muted" stroke-width="1.5" marker-end="url(#cvp-arrow2)" />
+    <text x="320" y="102" text-anchor="middle" class="svg-label small muted">pop</text>
+    <rect x="355" y="78" width="150" height="68" rx="8" class="f-accent-dim s-accent" />
+    <text x="430" y="106" text-anchor="middle" class="svg-label">event loop</text>
+    <text x="430" y="128" text-anchor="middle" class="svg-label small muted">one thread</text>
+    <line x1="505" y1="112" x2="565" y2="112" class="s-muted" stroke-width="1.5" marker-end="url(#cvp-arrow2)" />
+    <text x="535" y="102" text-anchor="middle" class="svg-label small muted">run</text>
+    <rect x="570" y="85" width="60" height="54" rx="8" class="f-raised s-border" />
+    <text x="600" y="117" text-anchor="middle" class="svg-label small">handler</text>
+    <line x1="430" y1="146" x2="430" y2="186" class="s-muted" stroke-width="1.5" marker-end="url(#cvp-arrow2)" />
+    <text x="500" y="170" text-anchor="middle" class="svg-label small muted">start async I/O</text>
+    <rect x="355" y="190" width="150" height="54" rx="8" class="f-inset s-border" />
+    <text x="430" y="214" text-anchor="middle" class="svg-label">kernel I/O</text>
+    <text x="430" y="232" text-anchor="middle" class="svg-label small muted">epoll / kqueue</text>
+    <polyline points="355,217 225,217 225,144" fill="none" class="s-accent-2" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#cvp-arrow2)" />
+    <text x="215" y="188" text-anchor="end" class="svg-label small muted">completion event</text>
+  </svg>
+</Diagram>
+
+## A tour of the models
+
+**Shared-memory threads with locks** are the oldest model: threads share an address space and coordinate via mutexes. Both classic failure modes come from that sharing. A **race**: two threads run `counter += 1`, which is really read–modify–write; both read 41, both write 42, and one increment vanishes. A **deadlock**: thread 1 locks A then waits for B while thread 2 locks B then waits for A — both wait forever. Neither bug shows up reliably under test load, which is why the model has a reputation for 3 a.m. pages.
+
+**The event loop** inverts the model: one thread, a queue of ready events, and non-blocking I/O. Concurrency without shared-state hazards — at the cost that any long computation on the loop freezes everything.
+
+**Async/await** is the ergonomic layer over event loops. `await` marks the points where a task parks; the runtime resumes it when the I/O completes. You write sequential-looking code and get interleaving for free.
+
+**Actors** (Erlang/Elixir, Akka) forbid shared memory entirely: each actor owns its state and communicates by asynchronous messages. Erlang's telecom heritage shows in the payoff — millions of lightweight processes, and one crashing actor cannot corrupt another's state.
+
+**CSP** (Go) shares the "communicate, don't share" philosophy but uses channels between goroutines rather than mailboxes per actor. Go's slogan compresses it: share memory by communicating, don't communicate by sharing memory.
+
+One language-level wrinkle worth knowing: CPython's **GIL** (global interpreter lock) lets only one thread execute Python bytecode at a time. Python threads give you concurrency — fine for I/O-bound work — but no parallelism for CPU-bound work; that requires multiple processes or native extensions that release the lock.
+
+## Trade-offs and pitfalls
+
+- **Concurrency adds coordination cost even without parallelism.** Interleaving means your invariants can be observed mid-update. A single-threaded Node service can still have "race conditions" across await points.
+- **Blocking the event loop is the classic single-thread failure.** One synchronous 200 ms JSON parse adds 200 ms of latency to every in-flight request. CPU work belongs in worker threads or separate processes.
+- **Threads are heavier than they look.** Each OS thread costs roughly 1 MB of stack and a context switch costs microseconds; 10,000 threads for 10,000 connections wastes gigabytes waiting. Goroutines and async tasks exist precisely because waiting should cost kilobytes, not megabytes.
+- **Parallelism is capped by the serial fraction.** Amdahl's law: if 10% of the work is inherently sequential, infinite cores yield at most a 10x speedup. Measure before you shard the computation.
+- **Locks compose badly.** Two individually correct lock-protected modules can deadlock when combined. Message-passing models trade this for a different pitfall: unbounded mailboxes and backpressure problems.
+
+## The systems-level bridge
+
+The same distinction scales up a level. A horizontally scaled service — 40 stateless replicas behind a load balancer — is **parallelism across machines**: many requests physically executing at once. Inside each replica, a request handler that fires three database queries and awaits them together is **concurrency**: one logical task structured so its waits overlap. Well-designed systems exploit both, and the sibling topics own the details — Scaling covers the machine-level story, Sync vs Async Communication covers the service-to-service one.
+
+## When to reach for which
+
+Profile first: is the workload waiting or computing? If it waits — on networks, disks, or downstream services — reach for concurrency: async/await or an event loop, and keep heavy computation off the hot path. If it computes, reach for parallelism: a worker pool sized near the core count, then more machines once one box is exhausted. Mixed workloads use both, in layers: nginx runs one event-loop worker per core, Node does the same via the cluster module, and Go schedules thousands of concurrent goroutines over a handful of parallel threads. And prefer models that avoid shared mutable state — channels, actors, or immutable messages — because the bugs you prevent are exactly the ones you cannot reproduce.

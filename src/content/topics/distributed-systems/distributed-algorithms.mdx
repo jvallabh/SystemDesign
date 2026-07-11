@@ -2,8 +2,114 @@
 title: "Algorithms in Distributed Systems"
 category: distributed-systems
 tier: written
-summary: "Consensus, leader election, vector clocks, and the other coordination primitives distributed systems are built on."
+summary: "The coordination toolbox — logical clocks, failure detectors, consensus, quorums, gossip, and fencing tokens — and where real systems use each one."
 order: 3
 resources: [distributed-algorithms-playlist]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+The moment state lives on more than one machine, you inherit three enemies: partial failure, a network that delays, drops, and reorders messages, and the absence of a global clock. Every algorithm on this page buys back one guarantee — ordering, agreement, membership, mutual exclusion — that a single machine gave you for free. This is a toolbox tour: what each primitive buys, why it works, and which production system runs it.
+
+## Time without trusting clocks
+
+Wall clocks lie. A typical quartz oscillator drifts tens of parts per million — seconds per day — so two "synchronized" servers diverge continuously. NTP pulls them back, but a correction can step a clock *backwards*, which is how naive timestamp ordering produces events that happen before their own causes. (Google smears leap seconds over 24 hours precisely because a repeated second breaks software.) Never order cross-machine events by wall clock.
+
+Lamport clocks replace time with a counter. Each node increments it on every local event, stamps outgoing messages with it, and on receive sets it to `max(local, message) + 1`. The guarantee: if event A could have caused event B, A's clock value is smaller — enough to build a total order (break ties by node ID). Kafka epochs and Raft terms are Lamport clocks in disguise. The limitation: a smaller value does *not* mean "happened before"; unrelated events just get arbitrary numbers.
+
+Vector clocks fix that by keeping one counter *per node*. If every entry of one vector is less than or equal to the other's, there is a causal path; if each beats the other somewhere, the events were concurrent — a genuine conflict. That detection power is why Amazon's Dynamo used them to flag conflicting writes. The cost: O(N) bytes per message, and pruning entries safely is fiddly.
+
+<Diagram caption="Lamport's rule: a receiver jumps its clock to max(local, message) + 1, so causes always carry smaller timestamps than effects.">
+  <svg viewBox="0 0 640 280" width="100%" role="img" aria-label="Two process timelines exchanging a message. Process P1 has events with clock values 1, 2, 3. P1's second event sends a message carrying t=2 to P2, whose clock was 1; P2 sets its clock to max of 1 and 2, plus 1, which is 3.">
+    <defs>
+      <marker id="lam-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-accent" />
+      </marker>
+    </defs>
+    <line x1="110" y1="80" x2="610" y2="80" class="s-border" stroke-width="1.5" />
+    <line x1="110" y1="200" x2="610" y2="200" class="s-border" stroke-width="1.5" />
+    <text x="70" y="85" text-anchor="middle" class="svg-label">P1</text>
+    <text x="70" y="205" text-anchor="middle" class="svg-label">P2</text>
+    <circle cx="170" cy="80" r="7" class="f-accent-dim s-accent" stroke-width="1.5" />
+    <circle cx="320" cy="80" r="7" class="f-accent-dim s-accent" stroke-width="1.5" />
+    <circle cx="470" cy="80" r="7" class="f-accent-dim s-accent" stroke-width="1.5" />
+    <text x="170" y="58" text-anchor="middle" class="svg-label">1</text>
+    <text x="320" y="58" text-anchor="middle" class="svg-label">2</text>
+    <text x="470" y="58" text-anchor="middle" class="svg-label">3</text>
+    <circle cx="200" cy="200" r="7" class="f-accent-dim s-accent" stroke-width="1.5" />
+    <circle cx="400" cy="200" r="7" class="f-accent s-accent" stroke-width="1.5" />
+    <text x="200" y="234" text-anchor="middle" class="svg-label">1</text>
+    <text x="400" y="234" text-anchor="middle" class="svg-label">3</text>
+    <line x1="326" y1="90" x2="394" y2="190" class="s-accent" stroke-width="1.5" marker-end="url(#lam-arrow)" />
+    <text x="378" y="132" class="svg-label small muted">msg carries t=2</text>
+    <text x="320" y="266" text-anchor="middle" class="svg-label small muted">receive: clock = max(local 1, msg 2) + 1 = 3</text>
+  </svg>
+</Diagram>
+
+## Failure detection: heartbeats and honest uncertainty
+
+A perfect failure detector is impossible on an asynchronous network: a crashed node and a slow node look identical from outside — silence. Every detector is a guess with a knob. Nodes send heartbeats; a peer that misses enough is *suspected* dead. A short timeout detects failures fast but falsely kills slow nodes; a long one is accurate but leaves the system leaderless for seconds. Phi-accrual detectors (Cassandra, Akka) model the historical distribution of heartbeat arrivals and output a continuous suspicion level instead of a binary verdict, adapting to real network behavior.
+
+## Consensus: getting a cluster to agree
+
+Consensus is the problem of many nodes agreeing on one value — or one *sequence* of values, the same problem applied to a log — despite crashes and lost messages. Paxos solved it first and remains the foundation; Raft repackaged the same core into something engineers can hold in their heads, and runs inside etcd, Consul, and Kafka's KRaft controller quorum (ZooKeeper's ZAB is a close cousin).
+
+Raft's shape: time is divided into numbered **terms** (a Lamport clock). Each term has at most one elected **leader**; all writes flow through it. The leader appends entries to its log, replicates to followers, and commits an entry once a **majority** acknowledges it. The majority is the whole trick: any two majorities share at least one node, so a candidate gathering majority votes must reach someone holding every committed entry — and election rules forbid voting for a staler log. Committed data survives any minority of failures, and a partitioned minority can never elect a rogue leader.
+
+One honest caveat: the FLP result proves that in a fully asynchronous system, no deterministic consensus algorithm can *guarantee* termination if even one process may crash. Real systems shrug this off with timeouts and randomized election delays — safety (never two leaders, never lost commits) holds unconditionally; liveness holds whenever the network cooperates, which is almost always.
+
+## Quorums: the overlap argument
+
+Strip consensus down and one idea remains: overlapping sets. Write to W replicas out of N, read from R, and if `W + R > N` every read set intersects every write set — some node in your read saw the latest write. Cassandra exposes this directly as tunable consistency (`QUORUM` writes plus `QUORUM` reads at N=3 means W=2, R=2). Quorums alone are weaker than consensus — no leader serializes concurrent writes — which is the trade-off space the CAP theorem topic covers.
+
+<Diagram caption="With N=5, W=3, R=3, any write quorum and any read quorum share at least one replica, so reads always touch a node holding the latest write.">
+  <svg viewBox="0 0 640 250" width="100%" role="img" aria-label="Five replica boxes N1 through N5. A write quorum bracket covers N1 to N3 and a read quorum bracket covers N3 to N5; N3 is highlighted as the guaranteed overlap.">
+    <rect x="32" y="95" width="96" height="52" rx="8" class="f-inset s-border" />
+    <rect x="152" y="95" width="96" height="52" rx="8" class="f-inset s-border" />
+    <rect x="272" y="95" width="96" height="52" rx="8" class="f-accent-dim s-accent" stroke-width="1.5" />
+    <rect x="392" y="95" width="96" height="52" rx="8" class="f-inset s-border" />
+    <rect x="512" y="95" width="96" height="52" rx="8" class="f-inset s-border" />
+    <text x="80" y="126" text-anchor="middle" class="svg-label">N1</text>
+    <text x="200" y="126" text-anchor="middle" class="svg-label">N2</text>
+    <text x="320" y="126" text-anchor="middle" class="svg-label">N3</text>
+    <text x="440" y="126" text-anchor="middle" class="svg-label">N4</text>
+    <text x="560" y="126" text-anchor="middle" class="svg-label">N5</text>
+    <path d="M32,82 L32,70 L368,70 L368,82" fill="none" class="s-accent" stroke-width="1.5" />
+    <text x="200" y="52" text-anchor="middle" class="svg-label small">write quorum W = 3</text>
+    <path d="M272,160 L272,172 L608,172 L608,160" fill="none" class="s-accent-2" stroke-width="1.5" />
+    <text x="440" y="196" text-anchor="middle" class="svg-label small">read quorum R = 3</text>
+    <text x="320" y="234" text-anchor="middle" class="svg-label small muted">W + R = 6, N = 5: the sets must overlap (here at N3)</text>
+  </svg>
+</Diagram>
+
+## Gossip and anti-entropy: coordination that scales
+
+Nobody runs Raft across 1,000 nodes for membership — a round trip to a majority per decision does not scale. Gossip protocols take the opposite bet: every node periodically picks a few random peers and exchanges state. Information spreads like an epidemic — the informed population roughly doubles each round, so a rumor reaches N nodes in O(log N) rounds while per-node traffic stays constant. A 1,000-node Cassandra cluster converges on membership changes in about ten one-second gossip rounds, with no coordinator; Consul's Serf layer (SWIM) does the same for health. Its companion, anti-entropy, periodically diffs replicas — via Merkle trees, so only differing ranges cross the wire — and repairs the drift gossip missed.
+
+## Distributed locks: leases and fencing tokens
+
+A lock a crashed node can hold forever is a deadlock generator, so real distributed locks are **leases**: locks with an expiry the holder must renew. But expiry creates a new failure mode — a client acquires the lease, hits a 15-second GC pause, and wakes up *believing it still holds the lock* while another client has legitimately acquired it. Two writers, corrupted data.
+
+The fix is a **fencing token**: a monotonically increasing number issued with each lease grant, attached to every write; the storage layer rejects any token lower than the highest seen, so the stale holder's writes bounce. This is why Redlock — Redis's multi-node locking recipe — draws criticism: it depends on bounded clock drift and pauses and provides no fencing. ZooKeeper (`zxid`) and etcd (revision numbers) give you fencing tokens for free.
+
+## Where each primitive runs
+
+| Primitive | Buys you | Runs in |
+| --- | --- | --- |
+| Lamport / vector clocks | Ordering and conflict detection without wall clocks | Raft terms, Kafka epochs, Dynamo-style stores |
+| Heartbeats / phi-accrual | Bounded-delay suspicion of dead nodes | Cassandra, Akka, every load balancer health check |
+| Consensus (Raft, Paxos, ZAB) | One agreed value or log despite failures | etcd, ZooKeeper, Consul, Kafka KRaft |
+| Quorums | Read-your-write overlap without a leader | Cassandra, Riak, Dynamo lineage |
+| Gossip + anti-entropy | Membership and repair at O(log N) rounds | Cassandra, Consul/Serf, Dynamo |
+| Leases + fencing tokens | Mutual exclusion that survives pauses | ZooKeeper, etcd, GFS/Chubby lineage |
+
+## Trade-offs and pitfalls
+
+- **Coordination is latency.** A consensus write is a round trip to a majority — single-digit milliseconds cross-zone, tens to hundreds cross-region. Keep consensus for control-plane data, never the request hot path.
+- **Aggressive timeouts cause flapping.** A detector tuned below real tail latency triggers constant leader elections, each an availability blip.
+- **Gossip is eventual.** Membership views disagree for seconds during churn — fine for health, wrong for anything needing a unique decision.
+- **Do not implement consensus yourself.** The bugs live in leadership transfer and log compaction. Use etcd, ZooKeeper, or Consul.
+
+## When to reach for what
+
+Ordering or causality questions: logical clocks, usually already embedded in your system's epoch or term numbers. One-of-a-kind decisions — leadership, config, locks: a consensus store, with fencing tokens on every guarded write. Per-key replication at scale: quorums. Membership and health beyond a few dozen nodes: gossip. When a design meeting proposes "we'll just timestamp it" or "a Redis lock is fine," this page is the checklist of what breaks first.

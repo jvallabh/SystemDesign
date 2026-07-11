@@ -7,4 +7,144 @@ order: 1
 sim: CapTheoremSim
 resources: [cap-theorem-video]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+import Diagram from '../../../components/Diagram.astro';
+import CapTheoremSim from '../../../components/sims/CapTheoremSim';
+
+The moment you replicate data onto a second machine, you inherit a problem: the network between the replicas can fail, and it will — a switch dies, a fiber cut splits two datacenters, a 30-second GC pause makes a healthy node look dead. The CAP theorem tells you exactly what you are forced to give up in that moment. It is also the most misquoted result in system design, so start with the precise statement.
+
+## What the theorem actually says
+
+When a network partition separates the nodes of a distributed data store, the system must sacrifice one of two properties:
+
+- **Consistency (C)** — every read returns the result of the most recent write, as if there were a single copy of the data. This is *linearizability*, a strong ordering guarantee.
+- **Availability (A)** — every request to a non-failed node gets a non-error response, with no guarantee it reflects the latest write.
+
+**Partition tolerance (P)** is not a third option you can decline. It just means the system keeps functioning when messages between nodes are lost or delayed — and since no real network delivers every message on time, a distributed system that cannot tolerate partitions is simply a system that breaks. The popular "pick two of three" framing is the misreading: you do not choose P at design time. Partitions choose you; the only decision is what your system does *while one is in progress*. Between partitions, a well-built system can deliver both C and A.
+
+Two more corrections worth internalizing:
+
+- **CAP's C is not ACID's C.** ACID consistency means a transaction preserves invariants inside one database — foreign keys hold, balances stay non-negative (the ACID topic owns that). CAP's C is about replicas agreeing on the order and recency of reads and writes.
+- **Calling a single-node Postgres "CA" is a category error.** With one node there is no network to partition, so CAP does not apply at all. The theorem activates the instant you add a replica.
+
+## One partition, two responses
+
+Take a 3-node cluster — A, B, C — replicating a single value, currently `x = 1`. The network fails so that A and B can still talk to each other, but C is cut off from both. A client next to the majority writes `x = 2`. A client next to C wants to write `x = 3`. What happens next depends entirely on which property the system sacrifices.
+
+### The CP response: refuse rather than lie
+
+A CP system requires a majority (quorum) to make progress. A and B form 2 of 3, so their side keeps serving reads and writes. C, alone, cannot know whether the other side is dead or merely unreachable — so it refuses. Writes to C error out; strict reads do too, because C's `x = 1` may be stale. This is how etcd and ZooKeeper behave: for the systems holding locks, leader elections, and cluster configuration, a wrong answer is far worse than no answer.
+
+<Diagram caption="CP under partition: the majority side keeps serving; the minority node rejects requests rather than return stale or divergent data.">
+  <svg viewBox="0 0 640 285" width="100%" role="img" aria-label="Three-node cluster split by a network partition in CP mode. Nodes A and B on the majority side hold x equals 2 and accept a client write. Node C on the minority side holds a stale x equals 1 and returns an error to its client.">
+    <defs>
+      <marker id="cap-arrow-1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="30" y="60" width="100" height="54" rx="8" class="f-inset s-ok" />
+    <text x="80" y="82" text-anchor="middle" class="svg-label">node A</text>
+    <text x="80" y="100" text-anchor="middle" class="svg-label small muted">x = 2</text>
+    <rect x="190" y="60" width="100" height="54" rx="8" class="f-inset s-ok" />
+    <text x="240" y="82" text-anchor="middle" class="svg-label">node B</text>
+    <text x="240" y="100" text-anchor="middle" class="svg-label small muted">x = 2</text>
+    <line x1="130" y1="87" x2="190" y2="87" class="s-muted" />
+    <text x="160" y="79" text-anchor="middle" class="svg-label small muted">sync</text>
+    <line x1="390" y1="28" x2="390" y2="245" class="s-danger" stroke-width="2" stroke-dasharray="7 7" />
+    <text x="390" y="18" text-anchor="middle" class="svg-label small muted">network partition</text>
+    <rect x="480" y="60" width="110" height="54" rx="8" class="f-inset s-danger" />
+    <text x="535" y="82" text-anchor="middle" class="svg-label">node C</text>
+    <text x="535" y="100" text-anchor="middle" class="svg-label small muted">x = 1 (stale)</text>
+    <rect x="185" y="195" width="110" height="44" rx="8" class="f-raised s-border" />
+    <text x="240" y="222" text-anchor="middle" class="svg-label">client</text>
+    <line x1="240" y1="195" x2="240" y2="122" class="s-ok" marker-end="url(#cap-arrow-1)" />
+    <text x="250" y="162" text-anchor="start" class="svg-label small">write x=2: ok</text>
+    <rect x="480" y="195" width="110" height="44" rx="8" class="f-raised s-border" />
+    <text x="535" y="222" text-anchor="middle" class="svg-label">client</text>
+    <line x1="535" y1="195" x2="535" y2="122" class="s-danger" marker-end="url(#cap-arrow-1)" />
+    <text x="545" y="162" text-anchor="start" class="svg-label small">write: error</text>
+    <text x="240" y="270" text-anchor="middle" class="svg-label small muted">majority (2 of 3): keeps serving</text>
+    <text x="535" y="270" text-anchor="middle" class="svg-label small muted">minority: refuses writes</text>
+  </svg>
+</Diagram>
+
+Note what the sacrifice actually looks like: node C is perfectly healthy hardware returning errors to a nearby client, purely because it cannot prove its data is current.
+
+### The AP response: accept everything, reconcile later
+
+An AP system lets both sides keep writing. The majority side records `x = 2`; C records `x = 3`. Every client got a fast, successful response — and the replicas now disagree. When the partition heals, the system must detect the divergence and resolve it. This is the Dynamo lineage — Amazon's Dynamo paper, Cassandra, Riak — built on the observation that for a shopping cart, accepting a write you must later merge beats showing a customer an error page.
+
+<Diagram caption="AP under partition: both sides accept writes and diverge; healing surfaces a conflict that something must resolve.">
+  <svg viewBox="0 0 640 290" width="100%" role="img" aria-label="The same three-node cluster in AP mode. During the partition all nodes accept writes, so nodes A and B hold x equals 2 while node C holds x equals 3. After the partition heals, the divergent values become a conflict that version vectors flag and the application merges.">
+    <defs>
+      <marker id="cap-arrow-2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="30" y="45" width="100" height="54" rx="8" class="f-inset s-ok" />
+    <text x="80" y="67" text-anchor="middle" class="svg-label">node A</text>
+    <text x="80" y="85" text-anchor="middle" class="svg-label small muted">x = 2</text>
+    <rect x="190" y="45" width="100" height="54" rx="8" class="f-inset s-ok" />
+    <text x="240" y="67" text-anchor="middle" class="svg-label">node B</text>
+    <text x="240" y="85" text-anchor="middle" class="svg-label small muted">x = 2</text>
+    <line x1="390" y1="24" x2="390" y2="130" class="s-danger" stroke-width="2" stroke-dasharray="7 7" />
+    <text x="390" y="14" text-anchor="middle" class="svg-label small muted">partition</text>
+    <rect x="480" y="45" width="110" height="54" rx="8" class="f-inset s-ok" />
+    <text x="535" y="67" text-anchor="middle" class="svg-label">node C</text>
+    <text x="535" y="85" text-anchor="middle" class="svg-label small muted">x = 3</text>
+    <text x="320" y="158" text-anchor="middle" class="svg-label small muted">both sides accept writes — values diverge</text>
+    <line x1="320" y1="172" x2="320" y2="204" class="s-muted" marker-end="url(#cap-arrow-2)" />
+    <text x="334" y="193" text-anchor="start" class="svg-label small">partition heals</text>
+    <rect x="130" y="214" width="380" height="58" rx="8" class="f-inset s-accent" />
+    <text x="320" y="238" text-anchor="middle" class="svg-label">conflict: x = 2 vs x = 3</text>
+    <text x="320" y="256" text-anchor="middle" class="svg-label small muted">version vectors flag siblings; app merges</text>
+  </svg>
+</Diagram>
+
+The simulation below runs this exact cluster live. Try three experiments: partition the cluster in CP mode and send a write to the minority node — watch it refuse while the majority keeps serving. Then flip to AP mode, write different values to each side, and watch the replicas diverge. Finally, heal the partition and watch the conflict surface and get resolved.
+
+<CapTheoremSim client:visible />
+
+## Quorums: the dial between the poles
+
+Real systems rarely sit at a pure pole; they expose a dial. With N replicas, require W acknowledgments per write and read from R replicas. If `R + W > N`, every read set overlaps every write set in at least one node, so a read can always see the newest acknowledged write. During a partition, a side that cannot assemble W or R nodes must refuse — quorum arithmetic is what *makes* a system CP.
+
+| N | W | R | Behavior |
+| --- | --- | --- | --- |
+| 3 | 2 | 2 | Overlap guaranteed; minority side refuses. The common CP-leaning default. |
+| 3 | 3 | 1 | Reads are cheap and always current, but one dead node blocks every write. |
+| 3 | 1 | 1 | Fast and available through any partition; no overlap, so reads can be stale. Eventual consistency. |
+
+Cassandra exposes this per query (`ONE`, `QUORUM`, `ALL`), so a single table can serve CP-style reads for account balances and AP-style reads for view counts. Caveat: overlapping quorums alone do not give full linearizability — the machinery that does (read repair, consensus rounds) belongs to the Distributed Algorithms topic.
+
+## When replicas disagree
+
+AP buys availability with conflicts, and something has to pay that bill.
+
+**Last-write-wins (LWW)** keeps the value with the highest timestamp and discards the rest — silently. Two problems: clocks on different machines disagree (NTP typically keeps them within a few milliseconds, but skew of hundreds of milliseconds happens), so "last" may be wrong; and even with perfect clocks, one of two genuinely concurrent writes is destroyed with no error reported. LWW is acceptable for data where losing an update is harmless (a sensor reading superseded every second) and dangerous for anything users typed.
+
+**Version vectors** track, per replica, how many updates each value has seen, which distinguishes "B's value descends from A's" (no conflict, keep B's) from "they diverged" (a true conflict). The store then keeps both versions as *siblings* and hands them to the application to merge — Dynamo's cart merge was a set union, which famously could resurrect a deleted item but never lost an addition. CRDTs push this further with data types that merge deterministically.
+
+## PACELC: the honest extension
+
+CAP is silent about the 99.9% of the time your network is healthy — and there is a trade-off then too. PACELC states it: if **P**artition, choose **A** or **C**; **E**lse, choose **L**atency or **C**onsistency. Strong consistency requires coordination on every write, and coordination costs round trips: about 0.5 ms within an availability zone, around 80–90 ms between Virginia and Frankfurt. A system that insists every write commit on a cross-region quorum turns a 1 ms write into a 90 ms write even with zero failures anywhere. That is why Dynamo-style stores are classified PA/EL (available under partition, fast otherwise) and etcd, ZooKeeper, and Spanner are PC/EC (consistent in both cases, paying latency for it always).
+
+## Classifying real systems
+
+| System | Under partition | Without partition | PACELC |
+| --- | --- | --- | --- |
+| etcd, ZooKeeper | CP — minority side refuses | Consistent; every write pays a quorum round trip | PC/EC |
+| Cassandra, Riak, Dynamo | AP by default; tunable per query via quorum levels | Fast by default; consistency dialed up per operation | PA/EL |
+| Google Spanner | CP | Consistent; latency bounded by clever clock infrastructure | PC/EC |
+| Single-node Postgres | Not classifiable — no partition is possible with one node | — | — |
+
+## Pitfalls
+
+- **"We picked CA."** No distributed system is CA. If someone claims it, they mean "we have not had a partition yet."
+- **Confusing CAP availability with uptime.** CAP's A is a formal property about non-failing nodes answering. etcd (CP) can have excellent real-world uptime; an AP system can be operationally useless while technically "available."
+- **Treating the choice as system-wide.** Modern stores choose per operation. Ask "which consistency level does this query use," not "is this database CP or AP."
+- **Defaulting to LWW.** It is the easiest conflict strategy to configure and the easiest way to silently lose user data.
+- **Forgetting slow equals partitioned.** A node stuck in a long GC pause is indistinguishable from a partitioned one. Partitions are not rare cable cuts; they are Tuesday.
+
+## Choosing under pressure
+
+Reach for CP when a wrong answer is worse than an error: distributed locks, leader election, configuration, unique username claims, inventory decrements, anything billing touches. Reach for AP when staleness is tolerable and an error page is the real business failure: shopping carts, feeds, likes, presence indicators, metrics. In an interview, state the theorem precisely — a partition forces the C-versus-A choice — then pick per operation and name the quorum settings that implement your pick.
