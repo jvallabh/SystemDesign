@@ -3,8 +3,3 @@ dist/
 .astro/
 .DS_Store
 npm-debug.log*
-
-# Local-only build docs (public repo — keep these private)
-docs/EXPLAINER.md
-docs/ROADMAP.md
-docs/ADR.md
