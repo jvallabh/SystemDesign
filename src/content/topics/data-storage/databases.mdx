@@ -2,8 +2,135 @@
 title: "Databases in System Design"
 category: data-storage
 tier: written
-summary: "A map of the database landscape and how to pick a storage engine for each part of a system."
+summary: "A workload-organized map of the database landscape and how to pick a store for each component of a system."
 order: 3
 resources: [databases-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+Every system design eventually asks the same question: where does this data live? Answering it well means matching each component's workload — its read/write mix, access pattern, and consistency needs — to a store built for that shape. Answering it badly means either stretching one database across workloads it was never built for, or scattering data across six exotic stores because each one had a great conference talk. The fix is a working map: know the categories, what each one wins at, and just enough internals to predict how a store behaves under your traffic.
+
+## A taxonomy by workload
+
+Databases are best organized not by vendor or by "SQL vs NoSQL" (that decision has its own page) but by the workload each category dominates:
+
+| Category | Canonical example | Wins when the workload is |
+|---|---|---|
+| OLTP relational | Postgres, MySQL | Transactional reads/writes on structured records: orders, users, inventory |
+| Key-value | Redis, DynamoDB | Get/put by primary key at sub-millisecond to single-digit-ms latency: sessions, carts, counters |
+| Document | MongoDB | Self-contained JSON records with a flexible, evolving shape |
+| Wide-column | Cassandra, ScyllaDB | Massive write throughput with key-ordered reads: events, feeds, messages |
+| Graph | Neo4j | Multi-hop relationship traversals: fraud rings, social graphs, recommendations |
+| Time-series | TimescaleDB, InfluxDB | Append-heavy timestamped data with time-window queries: metrics, IoT |
+| Full-text search | Elasticsearch, OpenSearch | Relevance-ranked text queries with typo tolerance and facets |
+| OLAP warehouse | Snowflake, ClickHouse | Aggregations scanning billions of rows: analytics, dashboards |
+| Object storage | S3, GCS | Immutable blobs at petabyte scale for cents/GB: images, video, backups |
+
+Two observations make the table useful. First, the rows overlap: Postgres has JSONB for documents, decent full-text search, and the Timescale extension — it can play four or five of these roles adequately at moderate scale. Second, each specialist earns its row through a structural bet a general-purpose engine cannot make: Elasticsearch builds inverted indexes, ClickHouse stores columns instead of rows, Cassandra gives up cross-partition transactions to make every node accept writes.
+
+## One level down: B-tree vs LSM-tree
+
+Most decisions in the table trace back to one internal split: how the storage engine puts bytes on disk.
+
+**B-trees** (Postgres, MySQL/InnoDB) keep data in fixed-size pages ordered in a shallow tree. A read walks root to leaf — three or four page accesses, mostly cached — so point reads and range scans are fast and predictable. A write must find the right page and rewrite it in place, which means random I/O and write amplification: touching one 100-byte row rewrites an 8KB page.
+
+**LSM-trees** (Cassandra, RocksDB, and the engine under most wide-column and many key-value stores) never modify data in place. Writes append to an in-memory memtable, which flushes to immutable sorted files (SSTables); background compaction merges the files. Writes become sequential I/O — which is why a single Cassandra node sustains write rates that would bury a B-tree — but a read may have to check the memtable plus several SSTables, paying read amplification, and compaction periodically eats disk bandwidth.
+
+<Diagram caption="B-trees rewrite pages in place and give cheap reads; LSM-trees append and compact, trading read amplification for sequential-write throughput.">
+  <svg viewBox="0 0 640 250" width="100%" role="img" aria-label="Side-by-side comparison: a B-tree walks from a root page to leaf pages and writes modify a page in place; an LSM-tree appends writes to a memtable that flushes to sstables which are merged by compaction, so reads may check several files.">
+    <defs>
+      <marker id="arr-db1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <line x1="320" y1="15" x2="320" y2="240" class="s-border" stroke-dasharray="4 4" />
+    <text x="10" y="20" class="svg-label small muted">B-tree (Postgres, MySQL)</text>
+    <rect x="105" y="32" width="90" height="34" rx="6" class="f-inset s-border" />
+    <text x="150" y="54" text-anchor="middle" class="svg-label">root</text>
+    <rect x="40" y="96" width="90" height="34" rx="6" class="f-inset s-border" />
+    <text x="85" y="118" text-anchor="middle" class="svg-label small">leaf page</text>
+    <rect x="170" y="96" width="90" height="34" rx="6" class="f-inset s-border" />
+    <text x="215" y="118" text-anchor="middle" class="svg-label small">leaf page</text>
+    <line x1="130" y1="66" x2="93" y2="92" class="s-muted" stroke-width="1.5" marker-end="url(#arr-db1)" />
+    <line x1="170" y1="66" x2="207" y2="92" class="s-muted" stroke-width="1.5" marker-end="url(#arr-db1)" />
+    <line x1="215" y1="162" x2="215" y2="134" class="s-accent" stroke-width="1.5" marker-end="url(#arr-db1)" />
+    <text x="215" y="180" text-anchor="middle" class="svg-label small">write (in place)</text>
+    <text x="150" y="215" text-anchor="middle" class="svg-label small muted">read: one path, root to leaf</text>
+    <text x="150" y="235" text-anchor="middle" class="svg-label small muted">write: rewrite the page</text>
+    <text x="340" y="20" class="svg-label small muted">LSM-tree (Cassandra, RocksDB)</text>
+    <rect x="410" y="32" width="150" height="34" rx="6" class="f-inset s-accent" />
+    <text x="485" y="54" text-anchor="middle" class="svg-label">memtable (RAM)</text>
+    <line x1="450" y1="66" x2="425" y2="94" class="s-muted" stroke-width="1.5" marker-end="url(#arr-db1)" />
+    <line x1="520" y1="66" x2="545" y2="94" class="s-muted" stroke-width="1.5" marker-end="url(#arr-db1)" />
+    <text x="485" y="88" text-anchor="middle" class="svg-label small muted">flush</text>
+    <rect x="370" y="98" width="100" height="30" rx="6" class="f-inset s-border" />
+    <text x="420" y="118" text-anchor="middle" class="svg-label small">sstable</text>
+    <rect x="500" y="98" width="100" height="30" rx="6" class="f-inset s-border" />
+    <text x="550" y="118" text-anchor="middle" class="svg-label small">sstable</text>
+    <line x1="428" y1="128" x2="458" y2="158" class="s-muted" stroke-width="1.5" marker-end="url(#arr-db1)" />
+    <line x1="542" y1="128" x2="512" y2="158" class="s-muted" stroke-width="1.5" marker-end="url(#arr-db1)" />
+    <text x="485" y="150" text-anchor="middle" class="svg-label small muted">compaction</text>
+    <rect x="410" y="162" width="150" height="30" rx="6" class="f-inset s-border" />
+    <text x="485" y="182" text-anchor="middle" class="svg-label small">merged sstable</text>
+    <text x="485" y="215" text-anchor="middle" class="svg-label small muted">write: append to memtable</text>
+    <text x="485" y="235" text-anchor="middle" class="svg-label small muted">read: check memtable + sstables</text>
+  </svg>
+</Diagram>
+
+The rule of thumb: read-heavy and mixed workloads favor B-trees; write-dominated, append-mostly workloads favor LSM-trees. When a database brags about write throughput, it is almost certainly an LSM engine, and you should immediately ask what its p99 read latency looks like during compaction.
+
+## Replication, and the lag you inherit
+
+Nearly every production database runs leader-follower replication: one node accepts writes and streams its change log to replicas. This buys durability (a follower can be promoted if the leader dies) and read scaling (fan reads out across replicas) — but replication is usually asynchronous, so replicas trail the leader. The trailing window, replica lag, is milliseconds when things are healthy and can stretch to seconds or minutes under load or during bulk operations.
+
+<Diagram caption="Writes go to the leader; replicas apply changes asynchronously, so a read against a replica can miss a write that just succeeded.">
+  <svg viewBox="0 0 640 180" width="100%" role="img" aria-label="A writer sends writes to a leader node, which asynchronously streams changes to two replicas; a reader querying replica 2 may see stale data during the replication lag window.">
+    <defs>
+      <marker id="arr-db2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="10" y="30" width="110" height="44" rx="8" class="f-inset s-border" />
+    <text x="65" y="57" text-anchor="middle" class="svg-label">writer</text>
+    <rect x="255" y="30" width="130" height="44" rx="8" class="f-inset s-accent" />
+    <text x="320" y="57" text-anchor="middle" class="svg-label">leader</text>
+    <rect x="510" y="30" width="120" height="44" rx="8" class="f-inset s-border" />
+    <text x="570" y="57" text-anchor="middle" class="svg-label">replica 1</text>
+    <rect x="510" y="120" width="120" height="44" rx="8" class="f-inset s-border" />
+    <text x="570" y="147" text-anchor="middle" class="svg-label">replica 2</text>
+    <rect x="10" y="120" width="110" height="44" rx="8" class="f-inset s-border" />
+    <text x="65" y="147" text-anchor="middle" class="svg-label">reader</text>
+    <line x1="122" y1="52" x2="251" y2="52" class="s-muted" stroke-width="1.5" marker-end="url(#arr-db2)" />
+    <text x="186" y="44" text-anchor="middle" class="svg-label small">write</text>
+    <line x1="387" y1="52" x2="506" y2="52" class="s-muted" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arr-db2)" />
+    <text x="447" y="44" text-anchor="middle" class="svg-label small muted">async apply</text>
+    <line x1="385" y1="70" x2="506" y2="130" class="s-muted" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arr-db2)" />
+    <text x="380" y="112" text-anchor="middle" class="svg-label small muted">lag: ms to seconds</text>
+    <line x1="122" y1="142" x2="506" y2="142" class="s-muted" stroke-width="1.5" marker-end="url(#arr-db2)" />
+    <text x="310" y="134" text-anchor="middle" class="svg-label small">read (may be stale)</text>
+  </svg>
+</Diagram>
+
+The design consequence: any read served from a replica can miss a write the same user just made. Route read-your-own-writes paths (a user viewing the profile they just edited) to the leader, and let genuinely lag-tolerant reads (browsing, feeds) hit replicas. Forgetting this split is the classic "I saved it but it's gone" bug.
+
+## Worked example: an e-commerce system
+
+- **Orders, payments, inventory, users → Postgres.** Money and stock counts need transactional correctness (the ACID page covers why), and the volumes — thousands of orders per minute even at serious scale — are trivial for one primary plus replicas.
+- **Cart and sessions → Redis.** Ephemeral, keyed by user, hit on every page view; sub-millisecond reads and native TTL expiry fit exactly.
+- **Catalog search → Elasticsearch.** "wireles headphones" must match wireless headphones, ranked and faceted. Fed from Postgres — CDC is the standard way to keep it in sync.
+- **Product images → S3** behind a CDN.
+- **Clickstream analytics → ClickHouse or Snowflake.** "Conversion rate by category last quarter" scans billions of events; running it on the OLTP box would starve checkout.
+
+Note the shape: one system of record (Postgres) plus derived, disposable specialists. Search and analytics can be rebuilt from the source of truth; that asymmetry keeps the polyglot manageable.
+
+## Trade-offs and pitfalls
+
+- **Every store is an operational liability.** Backups, upgrades, failover drills, monitoring, security patches, and an on-call rotation that understands its failure modes — multiplied per database. Two well-run stores beat five neglected ones.
+- **Resume-driven sprawl.** Adding Cassandra for a table with 200 writes per second, or a graph database for a single one-hop join, buys real operational pain for imaginary scale. Pick per measured workload, not per fashion.
+- **No transactions across stores.** Once data lives in two systems, they will drift; you need an explicit sync strategy (see CDC), not hope.
+- **Benchmarks hide amplification.** LSM write numbers omit compaction stalls; B-tree read numbers assume a warm cache. Test with your read/write mix.
+
+## When to reach for what
+
+Default to Postgres until it hurts. One boring relational primary handles transactions, documents (JSONB), moderate search, and low tens of thousands of transactions per second on a single well-provisioned machine — which is more than most systems ever see. Add Redis early if you have hot-path key lookups; add a search engine when users need relevance ranking; add a warehouse when analysts start slowing down production. Reach for wide-column or DynamoDB-style stores only when a single workload's write volume or scale-out needs demonstrably exceed a relational primary — at which point Sharding and SQL vs NoSQL are the pages to read next.

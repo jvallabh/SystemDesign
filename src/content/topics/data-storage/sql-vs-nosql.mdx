@@ -2,9 +2,108 @@
 title: "SQL vs NoSQL"
 category: data-storage
 tier: flagship
-summary: "Relational vs document, key-value, and wide-column stores — explore which fits your data shape and query patterns."
+summary: "Relational vs key-value, document, wide-column, and graph stores — match the data shape and access pattern to the engine built for it."
 order: 1
 sim: SqlNosqlSim
 resources: [sql-nosql-video]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+import Diagram from '../../../components/Diagram.astro';
+import SqlNosqlSim from '../../../components/sims/SqlNosqlSim';
+
+"SQL vs NoSQL" is usually framed as a war, which is exactly the wrong mental model. It is a matching problem: your data has a shape, your queries have a pattern, and each storage engine is a bet on one shape and one pattern being dominant. Pick the store whose bet matches yours and everything is easy; pick against it and you spend years re-implementing, in application code, the features the right engine would have given you for free.
+
+## What relational plus SQL actually buys
+
+A relational database is not "the old default" — it is a remarkably aggressive set of guarantees:
+
+- **Joins.** Data lives normalized — each fact stored once — and the engine reassembles any combination at read time. You do not have to know today which questions you will ask next year.
+- **Multi-row ACID transactions.** Debit one row, credit another, and either both happen or neither does — even across tables. The ACID topic covers the machinery; the point here is that no application-level workaround fully replaces it.
+- **Ad-hoc queries.** A declarative planner turns "revenue by region, last quarter, excluding refunds" into an execution plan with an index strategy you never wrote. New question, zero new code.
+- **Schema enforcement.** The database rejects a row with a missing column or a dangling foreign key at write time. Your data cannot silently rot.
+- **Four decades of tooling.** Backups, replication, migrations, ORMs, analysts who speak SQL. PostgreSQL and MySQL problems are almost never novel problems.
+
+A single beefy PostgreSQL instance comfortably serves tens of thousands of transactions per second on a dataset in the low terabytes. A large majority of systems never outgrow that — which is why "start with Postgres" is boring, correct advice.
+
+## Why NoSQL emerged
+
+Around 2004–2010, Google, Amazon, and Facebook hit workloads where the relational bet broke: datasets too large for one machine and write rates too high for one primary. Once data must spread across many nodes, the expensive features are precisely the cross-row ones — a join across partitions means network hops, and a transaction across partitions means distributed coordination (the trade-offs live in the CAP Theorem and Sharding topics).
+
+The NoSQL generation — Google's Bigtable and Amazon's Dynamo papers, then Cassandra, MongoDB, Redis and the rest — inverted the design. Instead of "model the data, then ask anything," they said: **declare your access patterns first, lay the data out so each pattern is one cheap partition-local operation, and drop the features that fight horizontal scale** — joins, multi-row transactions, and enforced schema. That is not one database category; it is four, each solving a different problem.
+
+## The four families
+
+| Family | Data model | Query style | Scaling model | Consistency default | Canonical use case |
+| --- | --- | --- | --- | --- | --- |
+| Relational (PostgreSQL, MySQL) | Tables, rows, foreign keys | SQL — ad-hoc joins, aggregates | Vertical first; read replicas; manual sharding | Strong (ACID) | Orders, payments, anything with invariants |
+| Key-value (Redis, DynamoDB) | Opaque value per key | `get`/`put` by key | Hash-partitioned, near-linear horizontal | Eventual (tunable) | Sessions, carts, feature flags |
+| Document (MongoDB) | Nested JSON-like aggregates | Queries and indexes on fields | Horizontal via sharding | Strong on primary reads; atomicity per document | Product catalogs, user profiles |
+| Wide-column (Cassandra) | Partitions of sorted rows | Restricted — must supply the partition key | Horizontal, leaderless, no primary | Eventual, tunable per query | Write-heavy event streams, feeds |
+| Graph (Neo4j) | Nodes and edges with properties | Traversals (Cypher) | Hard to partition; mostly replicas | Strong (ACID) | Fraud rings, social graphs, recommendations |
+
+Each family earns its place by doing one thing the others cannot:
+
+- **Key-value** buys *predictable latency at any scale*. Every operation is a hash of the key to a partition, then one lookup — sub-millisecond in Redis, single-digit milliseconds in DynamoDB, whether you store a gigabyte or a petabyte. DynamoDB will happily serve millions of requests per second; the price is that "by key" is essentially the only question you may ask.
+- **Document** buys *the aggregate*. A product with variants, images, and reviews is one nested document fetched in one read — no joins — and two products may have different fields. Natural when your objects are self-contained and read whole.
+- **Wide-column** buys *write throughput*. Cassandra's leaderless design means every node accepts writes with no primary bottleneck; appending to a partition is sequential and cheap. Perfect for "all events for device X, newest first" at hundreds of thousands of writes per second.
+- **Graph** buys *traversal*. "Friends of friends who bought this" is three self-joins in SQL, exploding in cost with depth; in Neo4j it is pointer-chasing from node to node, priced by the size of the neighborhood, not the size of the database.
+
+## Modeling: normalize, or shape data around queries
+
+The deepest difference is not syntax — it is where the modeling effort goes.
+
+<Diagram caption="Normalized tables reassemble via joins at read time; a document store pre-joins the aggregate at write time and serves it in one read by key.">
+  <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="Two-panel comparison. Left panel shows a relational schema with users, orders, and order items tables linked by foreign keys, joined at read time. Right panel shows a single order document containing customer, items, and total as one nested aggregate fetched by key.">
+    <text x="155" y="30" text-anchor="middle" class="svg-label">relational: normalized</text>
+    <rect x="90" y="48" width="130" height="38" rx="8" class="f-inset s-border" />
+    <text x="155" y="72" text-anchor="middle" class="svg-label small">users</text>
+    <rect x="90" y="116" width="130" height="38" rx="8" class="f-inset s-border" />
+    <text x="155" y="140" text-anchor="middle" class="svg-label small">orders</text>
+    <rect x="90" y="184" width="130" height="38" rx="8" class="f-inset s-border" />
+    <text x="155" y="208" text-anchor="middle" class="svg-label small">order_items</text>
+    <line x1="155" y1="86" x2="155" y2="116" class="s-muted" />
+    <text x="168" y="105" text-anchor="start" class="svg-label small muted">1:N</text>
+    <line x1="155" y1="154" x2="155" y2="184" class="s-muted" />
+    <text x="168" y="173" text-anchor="start" class="svg-label small muted">1:N</text>
+    <text x="155" y="256" text-anchor="middle" class="svg-label small muted">each fact stored once;</text>
+    <text x="155" y="274" text-anchor="middle" class="svg-label small muted">joins reassemble at read time</text>
+    <line x1="320" y1="20" x2="320" y2="285" class="s-border" stroke-dasharray="5 6" />
+    <text x="485" y="30" text-anchor="middle" class="svg-label">document: denormalized</text>
+    <rect x="370" y="48" width="230" height="174" rx="8" class="f-inset s-accent" />
+    <text x="485" y="76" text-anchor="middle" class="svg-label small">order 1042</text>
+    <text x="485" y="102" text-anchor="middle" class="svg-label small muted">customer: name, address</text>
+    <text x="485" y="128" text-anchor="middle" class="svg-label small muted">items: sku, qty, price</text>
+    <text x="485" y="154" text-anchor="middle" class="svg-label small muted">items: sku, qty, price</text>
+    <text x="485" y="180" text-anchor="middle" class="svg-label small muted">total: 61.90</text>
+    <text x="485" y="206" text-anchor="middle" class="svg-label small muted">status: shipped</text>
+    <text x="485" y="256" text-anchor="middle" class="svg-label small muted">whole aggregate in one read;</text>
+    <text x="485" y="274" text-anchor="middle" class="svg-label small muted">customer data copied per order</text>
+  </svg>
+</Diagram>
+
+**Schema-on-write vs schema-on-read is a question of where the debt lives.** A relational schema is enforced up front: migrations are ceremony, but every row in the table is guaranteed to match the declared shape. A document store accepts anything, so the schema becomes implicit — scattered across every code path that reads the data. That flexibility is a loan. Three years in, a "flexible" collection holds five generations of document shapes, and every reader carries defensive code for all of them. Schema-on-write pays the cost at migration time, once; schema-on-read pays it at every read, forever, unless you impose discipline (validators, versioned documents) that the engine never required of you.
+
+**Denormalization is the same trade on the data itself.** Copying the customer's name into each order makes reads one cheap lookup — and makes "the customer renamed themselves" a fan-out update across every copy, with no engine keeping the copies honest. NoSQL modeling therefore runs access-pattern-first: enumerate the queries, then design one table or document shape per query, duplicating data as needed. DynamoDB's single-table design is this taken to its logical end. It is extremely fast and extremely rigid — a new access pattern often means a backfill over the whole dataset, the very "new question, zero new code" property SQL gave you, surrendered.
+
+The simulation below runs the same application against different stores. Three experiments worth trying: start with a modest, read-heavy workload and watch the relational store win on flexibility with no real latency penalty. Then slide the scale up and flip the workload write-heavy, and watch the scorecard swing toward the key-value and wide-column stores as the single-node engine saturates. Finally, toggle multi-entity transactions on and watch the NoSQL scores drop as coordination they never promised comes due.
+
+<SqlNosqlSim client:visible />
+
+## NewSQL: the line blurs
+
+The dichotomy is eroding from both ends. Google's Spanner and CockroachDB shard and replicate like NoSQL yet speak SQL with serializable cross-shard transactions, paying for it with consensus rounds on the write path — single-digit to tens of milliseconds per commit, versus sub-millisecond local writes. Meanwhile PostgreSQL grew `jsonb` documents and MongoDB grew multi-document transactions. The families are converging on each other's features; what has not converged is the *cost profile* — a cross-shard transaction is never as cheap as a partition-local write, whatever the query language.
+
+## Trade-offs and pitfalls
+
+- **Choosing NoSQL for imagined scale.** The most common failure. A startup with 50 GB of relational-shaped data picks a document store "for growth," then hand-rolls joins in application code for years. Under roughly a terabyte and 10k writes per second, Postgres is rarely the bottleneck.
+- **Relational plus one entity per shard.** The mirror failure: sharding a relational database by hand and losing cross-shard joins and transactions anyway — all of NoSQL's costs, none of its operational simplicity at scale.
+- **Treating "schemaless" as "no schema work."** The schema still exists; you have merely moved it into code, undocumented and unenforced.
+- **Ignoring the consistency default.** Cassandra and DynamoDB defaults allow stale reads. Fine for a feed, an incident for a balance. Read the defaults before the incident does.
+- **Using a key-value store, then needing search.** "Find users by email" against a store indexed only by user ID means a full scan or a second, manually maintained index table.
+
+## Choosing a store
+
+Default to relational until a specific access pattern breaks it — you will know, because the fix stops being "add an index" and becomes "shard" or "cache everything." Reach for key-value when the query is always by key and latency must stay flat at any scale; document when objects are self-contained aggregates read whole; wide-column when sustained write throughput dominates and queries follow one partition key; graph when the queries are traversals more than lookups.
+
+Real systems pick several — polyglot persistence: orders in PostgreSQL for invariants, sessions in Redis for speed, the catalog in MongoDB, clickstream events in Cassandra. Mapping every component of a system to the store its workload deserves is the Databases in System Design page's territory.
+
+Every added store is another system to operate, back up, and keep consistent with the others — so add the second one when a measured pattern demands it, not on day one. The question was never SQL *or* NoSQL. It is: what shape is this data, how will you read it, and which engine made that exact bet?

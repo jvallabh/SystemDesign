@@ -70,7 +70,9 @@ function computeTargets(workload: Workload, scale: ScaleTier, acid: boolean): Ta
     const sc = SCALE_FIT[scale][i];
     const tx = TXN_FIT[i];
     comps.push([wl, sc, tx]);
-    totals.push(acid ? 0.6 * wl + 0.25 * sc + 0.15 * tx : 0.7 * wl + 0.3 * sc);
+    // Scale keeps its 0.3 weight in both branches so toggling ACID never
+    // dilutes the huge-scale penalty on single-node Postgres.
+    totals.push(acid ? 0.45 * wl + 0.3 * sc + 0.25 * tx : 0.7 * wl + 0.3 * sc);
   }
   return { comps, totals };
 }

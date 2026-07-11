@@ -2,8 +2,131 @@
 title: "ACID Transactions"
 category: data-storage
 tier: written
-summary: "Atomicity, consistency, isolation, durability — the guarantees that make concurrent writes safe."
+summary: "Atomicity, consistency, isolation, durability — the guarantees that let you write concurrent code without reasoning about interleavings."
 order: 4
 resources: [acid-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+import Diagram from '../../../components/Diagram.astro';
+
+A busy database runs your code in thousands of overlapping interleavings, any of which can be cut short by a crash. Reasoning about every interleaving and partial failure by hand is intractable — so the database sells you a contract instead. That contract is ACID: wrap statements in a transaction and, at its strongest settings, they execute as if alone and as if instantaneous, whatever else is running or failing.
+
+## Atomicity: all or nothing
+
+A transfer of $100 between accounts is two writes: debit A, credit B. If the server dies between them, $100 has vanished. Atomicity guarantees that either both writes survive or neither does — there is no observable in-between, even across a crash.
+
+The mechanism is logging. Before touching any data page, the engine appends the change to a **write-ahead log (WAL)** — a sequential file that is cheap to fsync. Commit means "the log record is durably on disk"; the actual data pages are updated lazily, often seconds later. After a crash, recovery replays the log: committed transactions are redone, uncommitted ones rolled back via undo records. Atomicity is simply the ability to reconstruct a clean state from the log.
+
+<Diagram caption="Commit = fsync the log record. Data pages are updated lazily; after a crash, replaying the WAL redoes committed work and undoes the rest.">
+  <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="A transaction sends a log record to the write-ahead log, which is fsynced before the commit is acknowledged. Data pages on disk are updated lazily afterwards. After a crash, the WAL is replayed to rebuild the pages.">
+    <defs>
+      <marker id="acid-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="25" y="60" width="130" height="60" rx="8" class="f-inset s-border" />
+    <text x="90" y="86" text-anchor="middle" class="svg-label">transaction</text>
+    <text x="90" y="104" text-anchor="middle" class="svg-label small muted">COMMIT</text>
+    <rect x="255" y="60" width="190" height="60" rx="8" class="f-inset s-accent" />
+    <text x="350" y="86" text-anchor="middle" class="svg-label">write-ahead log</text>
+    <text x="350" y="104" text-anchor="middle" class="svg-label small muted">append + fsync</text>
+    <line x1="155" y1="76" x2="248" y2="76" class="s-muted" marker-end="url(#acid-arrow)" />
+    <text x="201" y="52" text-anchor="middle" class="svg-label small muted">1 log the change</text>
+    <line x1="248" y1="104" x2="155" y2="104" class="s-muted" marker-end="url(#acid-arrow)" />
+    <text x="201" y="140" text-anchor="middle" class="svg-label small muted">2 ack commit</text>
+    <rect x="255" y="210" width="190" height="60" rx="8" class="f-inset s-border" />
+    <text x="350" y="236" text-anchor="middle" class="svg-label">data pages</text>
+    <text x="350" y="254" text-anchor="middle" class="svg-label small muted">on disk</text>
+    <line x1="350" y1="120" x2="350" y2="203" class="s-muted" marker-end="url(#acid-arrow)" />
+    <text x="360" y="166" text-anchor="start" class="svg-label small muted">3 flushed lazily</text>
+    <line x1="480" y1="90" x2="530" y2="90" class="s-danger" stroke-width="2" stroke-dasharray="6 6" />
+    <text x="505" y="76" text-anchor="middle" class="svg-label small">crash?</text>
+    <text x="505" y="216" text-anchor="middle" class="svg-label small muted">replay WAL:</text>
+    <text x="505" y="234" text-anchor="middle" class="svg-label small muted">redo committed,</text>
+    <text x="505" y="252" text-anchor="middle" class="svg-label small muted">undo the rest</text>
+    <line x1="505" y1="102" x2="505" y2="198" class="s-danger" stroke-dasharray="4 4" marker-end="url(#acid-arrow)" />
+  </svg>
+</Diagram>
+
+## Consistency: the odd one out
+
+Consistency here means "application-defined invariants hold": balances never go negative, every order row has a customer. Unlike the other three letters, the database cannot supply this on its own — it knows nothing of your invariants beyond declared constraints (foreign keys, CHECK, UNIQUE). Consistency is a contract: if each transaction individually preserves the invariants, atomicity, isolation, and durability guarantee the database as a whole stays valid. Joe Hellerstein has quipped that the C was tossed in mainly to make the acronym work. (It is unrelated to CAP's consistency, which is about replica agreement.)
+
+## Isolation: the deep one
+
+Isolation is where the real engineering lives. Perfect isolation — **serializability** — means the outcome equals some one-at-a-time execution of the transactions. But enforcing it costs throughput, so every database offers weaker levels that permit specific, named anomalies:
+
+- **Dirty read** — reading another transaction's uncommitted (possibly rolled-back) write.
+- **Non-repeatable read** — reading the same row twice inside one transaction and getting different values.
+- **Phantom** — re-running a query and seeing rows appear or vanish because another transaction inserted or deleted matches.
+- **Write skew** — two transactions each read data, make a decision based on it, and write to *different* rows; each write is fine alone, but together they break an invariant.
+
+| Isolation level | Dirty read | Non-repeatable read | Phantom | Write skew |
+| --- | --- | --- | --- | --- |
+| Read uncommitted | possible | possible | possible | possible |
+| Read committed | blocked | possible | possible | possible |
+| Repeatable read / snapshot | blocked | blocked | mostly blocked | possible |
+| Serializable | blocked | blocked | blocked | blocked |
+
+Write skew is the one that surprises people, because snapshot isolation — which feels airtight — permits it. Classic example: a hospital requires at least one doctor on call, and Alice and Bob both are. Each opens a transaction, reads "2 doctors on call", concludes it is safe to leave, and sets their *own* row to off-call. Neither touched the row the other wrote, so there is no write conflict — both commit, and zero doctors are on call. Only serializable isolation (or an explicit `SELECT ... FOR UPDATE` on the rows read) catches it.
+
+<Diagram caption="Write skew under snapshot isolation: both transactions read the same snapshot, write disjoint rows, and jointly violate the invariant.">
+  <svg viewBox="0 0 640 250" width="100%" role="img" aria-label="Timeline of two concurrent transactions. Both read that two doctors are on call, then each sets their own row to off-call and commits. The final state has zero doctors on call, breaking the invariant.">
+    <defs>
+      <marker id="skew-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <line x1="130" y1="30" x2="620" y2="30" class="s-muted" marker-end="url(#skew-arrow)" />
+    <text x="140" y="20" text-anchor="start" class="svg-label small muted">time</text>
+    <text x="20" y="85" text-anchor="start" class="svg-label small">txn A (Alice)</text>
+    <line x1="130" y1="80" x2="560" y2="80" class="s-border" />
+    <circle cx="190" cy="80" r="5" class="f-accent" />
+    <text x="190" y="64" text-anchor="middle" class="svg-label small">read: 2 on call</text>
+    <circle cx="360" cy="80" r="5" class="f-accent" />
+    <text x="360" y="64" text-anchor="middle" class="svg-label small">alice = off</text>
+    <circle cx="500" cy="80" r="5" class="f-ok" />
+    <text x="500" y="64" text-anchor="middle" class="svg-label small">commit</text>
+    <text x="20" y="165" text-anchor="start" class="svg-label small">txn B (Bob)</text>
+    <line x1="130" y1="160" x2="620" y2="160" class="s-border" />
+    <circle cx="260" cy="160" r="5" class="f-accent-2" />
+    <text x="260" y="188" text-anchor="middle" class="svg-label small">read: 2 on call</text>
+    <circle cx="430" cy="160" r="5" class="f-accent-2" />
+    <text x="430" y="188" text-anchor="middle" class="svg-label small">bob = off</text>
+    <circle cx="580" cy="160" r="5" class="f-ok" />
+    <text x="580" y="188" text-anchor="middle" class="svg-label small">commit</text>
+    <text x="320" y="230" text-anchor="middle" class="svg-label small">result: 0 doctors on call — invariant broken, no write conflict detected</text>
+  </svg>
+</Diagram>
+
+### MVCC: how readers avoid blocking writers
+
+Modern engines (Postgres, MySQL InnoDB, Oracle) implement isolation with **multi-version concurrency control** rather than read locks. Every write creates a new version of the row tagged with the writing transaction's ID; old versions stick around. A reader is handed a snapshot — "versions committed before I started" — untouched by concurrent writes. Readers never block writers and writers never block readers, which is why a long analytics query does not freeze OLTP traffic. The price: dead versions must be garbage-collected (Postgres VACUUM), and long transactions pin old versions, bloating tables.
+
+### What your database actually gives you
+
+Mainstream relational databases do not default to serializable because it costs real throughput: either pessimistic locking (readers and writers block each other) or Postgres-style serializable snapshot isolation, which tracks read/write dependencies and aborts transactions forming a dangerous cycle — forcing you to build retry loops. So defaults are weaker: **Postgres, Oracle, and SQL Server default to read committed; MySQL InnoDB defaults to repeatable read.** Postgres's "repeatable read" is actually snapshot isolation, which also prevents most phantoms — stronger than the SQL standard requires.
+
+## Durability: surviving the crash
+
+Durability means a committed transaction survives power loss. Mechanically it is the same WAL: commit does not return until the log record is fsynced — roughly 1 ms on an SSD, amortized by batching concurrent commits into one fsync (group commit). But a single disk can die outright, so serious deployments extend durability with replication: Postgres synchronous replication withholds the commit ack until a standby also has the WAL record. Some shops deliberately relax this (`synchronous_commit = off`), accepting the loss of the last few hundred milliseconds of commits for lower latency.
+
+## Across machines: 2PC and sagas
+
+Inside one node, ACID is a solved problem. Across services with separate databases it gets ugly. The classic answer, **two-phase commit**, has a coordinator ask every participant to *prepare* (make the transaction durable but undecided), then tells everyone to commit. The flaw is blocking: a prepared participant must hold its locks until the coordinator delivers a verdict. If the coordinator crashes after phase one, participants sit in doubt — rows locked, potentially for minutes. That is why 2PC rarely crosses service boundaries in modern architectures.
+
+The microservices alternative is the **saga**: a chain of ordinary local transactions, each with a compensating action (refund the charge, restock the item) that runs if a later step fails. You trade isolation — intermediate states are visible — for availability, and every step must be safely retryable (the Idempotency topic covers that).
+
+## Contrast: BASE
+
+The opposite corner of the design space is BASE — Basically Available, Soft state, Eventual consistency — the philosophy behind Dynamo-style stores like Cassandra. BASE systems accept writes optimistically and converge replicas later, pushing conflict handling onto the application. It is not "ACID but worse"; it is a different bet — availability and write throughput over invariant enforcement — fitting shopping carts better than ledgers.
+
+## Pitfalls
+
+- **Assuming the default isolation level is serializable.** It never is. Check-then-write invariants (unique usernames, balance floors, on-call minimums) need serializable, an explicit lock, or a declared constraint.
+- **Transactions held open across network calls.** An HTTP call inside a transaction pins locks and MVCC versions for the full round trip; do slow work outside.
+- **No retry loop under serializable.** Serialization failures are normal operation, not errors — code that does not retry fails randomly under load.
+- **Trusting ORM transaction boundaries.** Many frameworks auto-commit per statement unless told otherwise, quietly discarding atomicity.
+
+## When to reach for it
+
+If your invariants live inside one database, use transactions liberally at the default level — they are cheap — and escalate to `SELECT ... FOR UPDATE` or per-transaction serializable only for check-then-write operations. If an invariant spans services, do not reach for 2PC; restructure it as a saga, or redesign so the invariant lives in one place. And when someone proposes relaxing isolation or durability for speed, make them name the anomaly they are accepting — the table above is the checklist.

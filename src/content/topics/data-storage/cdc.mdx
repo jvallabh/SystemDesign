@@ -2,7 +2,135 @@
 title: "Change Data Capture (CDC)"
 category: data-storage
 tier: written
-summary: "Streaming every database change as an event: how CDC keeps caches, search indexes, and replicas in sync."
+summary: "Streaming every database change as an event: how CDC keeps caches, search indexes, and warehouses in sync without dual-write bugs."
 order: 5
+resources: [cdc-confluent-article, cdc-redhat-article]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+Every serious system grows read-side copies of its database: a Redis cache, an Elasticsearch index, a warehouse table, another team's local view. The database is the source of truth, but four other systems need to reflect it — and the obvious way to keep them in sync, having the application write to all of them, fails in ways that are quiet, rare, and permanent. Change Data Capture flips the approach: instead of trusting the application to announce its writes, you tail the database's own record of what changed.
+
+## The dual-write problem
+
+Suppose an order service updates Postgres and then updates the search index:
+
+```text
+1. UPDATE orders SET status = 'shipped' WHERE id = 42;   -- succeeds
+2. POST /orders/_update/42  { "status": "shipped" }       -- times out
+```
+
+Now the database says shipped and search says pending, and nothing will ever reconcile them. Swap the order and you get the mirror-image bug: search updated, then the database transaction rolls back, and search advertises a state that never existed. Wrap both in a try/catch and you still lose — the process can crash between the two calls. Two independent systems cannot be updated atomically without distributed transactions, which neither Redis nor Elasticsearch speaks.
+
+There is a second, subtler failure: ordering. Two app instances update the same row concurrently; the database serializes them one way, but their follow-up cache writes race and land the other way. The cache now holds the older value forever.
+
+<Diagram caption="Dual writes can fail between the two updates; CDC derives every downstream update from the committed change itself.">
+  <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="Top: an app writes to the database successfully but its second write to the search index fails, leaving the two stores diverged. Bottom: the app writes only to the database, and a CDC pipeline reads committed changes and updates the search index.">
+    <defs>
+      <marker id="arr-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+      <marker id="arr-cd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-danger" />
+      </marker>
+    </defs>
+    <text x="10" y="20" class="svg-label small muted">dual write</text>
+    <rect x="10" y="34" width="110" height="46" rx="8" class="f-inset s-border" />
+    <text x="65" y="62" text-anchor="middle" class="svg-label">app</text>
+    <rect x="270" y="34" width="120" height="46" rx="8" class="f-inset s-border" />
+    <text x="330" y="62" text-anchor="middle" class="svg-label">database</text>
+    <rect x="500" y="34" width="130" height="46" rx="8" class="f-inset s-danger" />
+    <text x="565" y="62" text-anchor="middle" class="svg-label">search idx</text>
+    <line x1="122" y1="57" x2="266" y2="57" class="s-muted" stroke-width="1.5" marker-end="url(#arr-c)" />
+    <text x="194" y="48" text-anchor="middle" class="svg-label small">1. ok</text>
+    <path d="M65,84 L65,112 L565,112 L565,90" fill="none" class="s-danger" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arr-cd)" />
+    <text x="315" y="130" text-anchor="middle" class="svg-label small">2. timeout — stores diverge forever</text>
+    <text x="10" y="180" class="svg-label small muted">CDC</text>
+    <rect x="10" y="194" width="110" height="46" rx="8" class="f-inset s-border" />
+    <text x="65" y="222" text-anchor="middle" class="svg-label">app</text>
+    <rect x="200" y="194" width="120" height="46" rx="8" class="f-inset s-border" />
+    <text x="260" y="222" text-anchor="middle" class="svg-label">database</text>
+    <rect x="380" y="194" width="90" height="46" rx="8" class="f-inset s-accent" />
+    <text x="425" y="222" text-anchor="middle" class="svg-label">CDC</text>
+    <rect x="500" y="194" width="130" height="46" rx="8" class="f-inset s-border" />
+    <text x="565" y="222" text-anchor="middle" class="svg-label">search idx</text>
+    <line x1="122" y1="217" x2="196" y2="217" class="s-muted" stroke-width="1.5" marker-end="url(#arr-c)" />
+    <line x1="322" y1="217" x2="376" y2="217" class="s-muted" stroke-width="1.5" marker-end="url(#arr-c)" />
+    <line x1="472" y1="217" x2="496" y2="217" class="s-muted" stroke-width="1.5" marker-end="url(#arr-c)" />
+    <text x="349" y="208" text-anchor="middle" class="svg-label small muted">log</text>
+    <text x="320" y="270" text-anchor="middle" class="svg-label small muted">one write; downstream follows the committed log</text>
+  </svg>
+</Diagram>
+
+## Three ways to capture changes
+
+| | Query polling | Triggers | Log-based |
+|---|---|---|---|
+| Mechanism | Re-query rows where `updated_at` is newer than the last scan | Trigger writes each change to an audit table | Tail the WAL / binlog the database already writes |
+| Deletes | Missed — the row is gone | Captured | Captured |
+| Intermediate states | Missed if a row changes twice between polls | Captured | Captured |
+| Latency | Poll interval (seconds to minutes) | Near-real-time | Near-real-time (typically well under a second) |
+| Write-path cost | None, but repeated scan load on reads | Extra writes inside every transaction | Near zero — the log exists anyway |
+| Ordering guarantee | None across rows | Per-table, awkward across tables | Exact commit order |
+
+Polling is the duct-tape version: cheap to build, but it misses deletes, misses intermediate states, and turns freshness into a scan-frequency knob you pay for in database load. Triggers fix completeness but put capture work inside the hot transaction path — every insert now performs two inserts, and trigger sprawl is notoriously hard to audit. Log-based CDC is where mature systems land, because the database already produces a perfect changelog for its own crash recovery and replication: Postgres's write-ahead log, MySQL's binlog, MongoDB's oplog. Reading it costs the primary almost nothing — it is the same interface a replica uses.
+
+## Log-based mechanics
+
+Every committed transaction is appended to the log before it is acknowledged; that is what makes the log authoritative. A log-based CDC connector — Debezium is the de facto open-source standard — connects like a replication client, decodes the log into row-level events (`op: c/u/d`, before-image, after-image, source position), and publishes them to Kafka, typically one topic per table, keyed by primary key.
+
+That keying choice carries the ordering guarantee: Kafka preserves order within a partition, and all events for one key hash to one partition, so every consumer sees the changes to a given row in exactly the order the database committed them. Order across different keys is not guaranteed — and almost never needed. Broker internals belong to the Message Queues topic; what matters here is that per-key ordering survives the whole pipeline.
+
+Two operational realities come with the territory. First, **snapshots**: a new pipeline (or a new consumer, like a freshly built search index) needs the current state, not just changes from now on, so connectors perform an initial consistent snapshot of each table and then switch to the log at the exact position the snapshot represents. Second, **schema evolution**: `ALTER TABLE` changes the shape of subsequent events, so production pipelines run a schema registry and choose compatible evolution (add nullable columns; never repurpose one) — otherwise a Tuesday migration breaks every consumer Wednesday morning.
+
+## The outbox pattern
+
+Raw CDC events are row-shaped: "row 42 in `orders` changed." Sometimes downstream services want intent, not rows — `OrderShipped`, with a specific payload, decoupled from your table layout. The transactional outbox delivers that without reintroducing dual writes: in the same database transaction as the business change, insert an event row into an `outbox` table. The transaction commits or rolls back atomically — business data and event together — and CDC tails the outbox table and publishes each row to Kafka. You get exactly the event you designed, with the atomicity of a local transaction. The outbox rows can be deleted immediately after insert; CDC reads them from the log, not the table.
+
+<Diagram caption="The outbox pattern: one local transaction writes both the business row and the event; CDC publishes the event and consumers fan out.">
+  <svg viewBox="0 0 640 250" width="100%" role="img" aria-label="An app writes the orders row and an outbox event in one transaction. Debezium tails the WAL and publishes to Kafka, which fans out to cache invalidation, search indexing, and warehouse consumers.">
+    <defs>
+      <marker id="arr-o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="10" y="90" width="90" height="46" rx="8" class="f-inset s-border" />
+    <text x="55" y="118" text-anchor="middle" class="svg-label">app</text>
+    <rect x="140" y="55" width="160" height="120" rx="8" fill="none" class="s-border" stroke-dasharray="5 4" />
+    <text x="220" y="45" text-anchor="middle" class="svg-label small muted">one transaction</text>
+    <rect x="152" y="66" width="136" height="40" rx="6" class="f-inset s-border" />
+    <text x="220" y="91" text-anchor="middle" class="svg-label small">orders row</text>
+    <rect x="152" y="122" width="136" height="40" rx="6" class="f-inset s-accent" />
+    <text x="220" y="147" text-anchor="middle" class="svg-label small">outbox event</text>
+    <line x1="102" y1="113" x2="136" y2="113" class="s-muted" stroke-width="1.5" marker-end="url(#arr-o)" />
+    <rect x="340" y="90" width="110" height="46" rx="8" class="f-inset s-accent" />
+    <text x="395" y="112" text-anchor="middle" class="svg-label small">Debezium</text>
+    <text x="395" y="127" text-anchor="middle" class="svg-label small muted">tails WAL</text>
+    <line x1="302" y1="113" x2="336" y2="113" class="s-muted" stroke-width="1.5" marker-end="url(#arr-o)" />
+    <rect x="480" y="90" width="80" height="46" rx="8" class="f-inset s-border" />
+    <text x="520" y="118" text-anchor="middle" class="svg-label">Kafka</text>
+    <line x1="452" y1="113" x2="476" y2="113" class="s-muted" stroke-width="1.5" marker-end="url(#arr-o)" />
+    <line x1="562" y1="103" x2="596" y2="40" class="s-muted" stroke-width="1.5" marker-end="url(#arr-o)" />
+    <line x1="562" y1="113" x2="590" y2="113" class="s-muted" stroke-width="1.5" marker-end="url(#arr-o)" />
+    <line x1="562" y1="123" x2="596" y2="190" class="s-muted" stroke-width="1.5" marker-end="url(#arr-o)" />
+    <text x="600" y="28" text-anchor="middle" class="svg-label small">cache</text>
+    <text x="594" y="117" text-anchor="start" class="svg-label small">search</text>
+    <text x="600" y="212" text-anchor="middle" class="svg-label small">warehouse</text>
+  </svg>
+</Diagram>
+
+## Delivery semantics
+
+CDC pipelines are at-least-once, not exactly-once. A connector that crashes after publishing but before checkpointing its log position replays a window of events on restart. Consumers must therefore be idempotent: applying "set row 42 to shipped" twice is harmless, and upserts keyed by primary key make most CDC consumers naturally so. For consumers that count or append rather than overwrite, deduplicate on the event's log position (LSN / binlog offset), which uniquely identifies each change.
+
+## Trade-offs and pitfalls
+
+- **You are now running a pipeline.** Debezium, Kafka Connect, a schema registry, monitoring for connector lag — real operational surface. For one cache and one table, this can be overkill.
+- **Replication slot leaks.** In Postgres, a stopped consumer with an open replication slot prevents WAL cleanup; the disk fills until the primary falls over. Alert on slot lag from day one.
+- **Downstream is eventually consistent.** CDC lag is typically tens to hundreds of milliseconds, but spikes during bulk loads or migrations. Anything that must read its own writes should read the database, not the derivative.
+- **Row events leak schema.** Publishing raw table changes couples every consumer to your table design. The outbox pattern (or a transform layer) is the fix; skipping it is the most common long-term regret.
+- **Snapshots of big tables hurt.** Snapshotting a 2TB table can take hours and load the primary; schedule initial syncs off-peak and use incremental snapshotting where the connector supports it.
+
+## When to reach for it
+
+Reach for CDC the moment two or more downstream systems mirror the same database, or when you catch yourself writing "update X, then also update Y" in application code — that line is a bug you have not met yet. Cache invalidation feeds, search indexing, warehouse replication, and audit trails are the canonical wins, and Debezium into Kafka is the default stack unless your cloud's managed equivalent (like AWS DMS) already fits. Skip it when a single consumer can tolerate minutes of staleness — a cron job reading `updated_at` is honestly fine — and remember that CDC moves state changes; if what you need is commands or workflows between services, that is Message Queues territory, not a changelog.

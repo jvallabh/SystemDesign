@@ -7,4 +7,173 @@ order: 2
 sim: ShardingSim
 resources: [sharding-course, sharding-partitioning-video]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+import ShardingSim from '../../../components/sims/ShardingSim';
+
+A single database node has two hard ceilings: how much data fits on its disks, and how many writes per second its one primary can absorb. Read replicas and caching relieve read pressure, but neither adds a byte of write capacity or storage. When a table heads past a few terabytes, or sustained writes climb into the tens of thousands per second, the only move left is to split the data itself across machines. That split is partitioning, and every hard problem in it flows from one decision: *which rows live where*.
+
+## Two axes of splitting
+
+**Vertical partitioning** splits by table or column: move `orders` and `analytics_events` into separate databases, or peel large blob columns away from the hot row data they slow down. It's cheap and often the right first move, but it has a built-in ceiling — your biggest table still lives, whole, on one node.
+
+**Horizontal partitioning — sharding** — splits the *rows* of one table across nodes, using a **shard key** derived from each row. There is no ceiling: more data or more writes means more shards. Everything below is about horizontal sharding, because that's where the sharp edges are.
+
+## Range, hash, and directory
+
+Every sharding scheme answers one question: given a key, which shard? The two core answers fail in exactly opposite ways.
+
+| | Range | Hash | Directory |
+|---|---|---|---|
+| **Placement** | Contiguous key spans: shard 1 gets `a–h`, shard 2 gets `i–q`… | `hash(key)` decides; adjacent keys scatter | Explicit lookup table maps each key (or bucket) to a shard |
+| **Range scans** | Fast — one shard, sequential read | Impossible without querying every shard | Depends on how buckets are assigned |
+| **Load spread** | Only as good as your key distribution | Near-uniform by construction | Whatever you make it |
+| **Failure mode** | **Hot ranges**: sequential keys (timestamps, auto-increment IDs) funnel every write to the newest shard | **No locality**: "last 24 hours of events" becomes a scatter-gather across all shards | The directory is an extra hop and a single point you must scale and keep available |
+| **Used by** | HBase, Bigtable, CockroachDB | Cassandra, DynamoDB | Vitess topology, MongoDB config servers |
+
+The range failure mode is the one people walk into: timestamp keys written a millisecond apart are neighbors, so every write happening right now lands on the same shard. You bought ten machines and one does all the work.
+
+<Diagram caption="The same write stream under range and hash sharding: sequential keys pile onto the last range shard; hashing spreads them evenly.">
+  <svg viewBox="0 0 640 255" width="100%" role="img" aria-label="Two panels. Left: range sharding on a timestamp key sends all incoming writes to shard 3, marked hot. Right: hash sharding spreads the same writes roughly one third to each of three shards.">
+    <defs>
+      <marker id="shard-arr-danger" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-danger" />
+      </marker>
+      <marker id="shard-arr-ok" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-ok" />
+      </marker>
+    </defs>
+    <text x="160" y="26" text-anchor="middle" class="svg-label">range on timestamp</text>
+    <rect x="60" y="42" width="200" height="50" rx="8" class="f-inset s-border" />
+    <text x="160" y="63" text-anchor="middle" class="svg-label">incoming writes</text>
+    <text x="160" y="81" text-anchor="middle" class="svg-label small muted">keys arrive in order</text>
+    <rect x="14" y="170" width="88" height="46" rx="8" class="f-inset s-border" />
+    <text x="58" y="197" text-anchor="middle" class="svg-label">shard 1</text>
+    <rect x="116" y="170" width="88" height="46" rx="8" class="f-inset s-border" />
+    <text x="160" y="197" text-anchor="middle" class="svg-label">shard 2</text>
+    <rect x="218" y="170" width="88" height="46" rx="8" class="f-inset s-danger" stroke-width="2" />
+    <text x="262" y="197" text-anchor="middle" class="svg-label">shard 3</text>
+    <line x1="140" y1="92" x2="248" y2="166" class="s-danger" stroke-width="2" marker-end="url(#shard-arr-danger)" />
+    <line x1="160" y1="92" x2="260" y2="166" class="s-danger" stroke-width="2" marker-end="url(#shard-arr-danger)" />
+    <line x1="180" y1="92" x2="272" y2="166" class="s-danger" stroke-width="2" marker-end="url(#shard-arr-danger)" />
+    <text x="58" y="236" text-anchor="middle" class="svg-label small muted">0%</text>
+    <text x="160" y="236" text-anchor="middle" class="svg-label small muted">0%</text>
+    <text x="262" y="236" text-anchor="middle" class="svg-label small muted">100% — hot</text>
+    <line x1="321" y1="16" x2="321" y2="245" class="s-border" stroke-dasharray="4 4" />
+    <text x="482" y="26" text-anchor="middle" class="svg-label">hash of key</text>
+    <rect x="382" y="42" width="200" height="50" rx="8" class="f-inset s-border" />
+    <text x="482" y="63" text-anchor="middle" class="svg-label">incoming writes</text>
+    <text x="482" y="81" text-anchor="middle" class="svg-label small muted">same key stream</text>
+    <rect x="336" y="170" width="88" height="46" rx="8" class="f-inset s-border" />
+    <text x="380" y="197" text-anchor="middle" class="svg-label">shard 1</text>
+    <rect x="438" y="170" width="88" height="46" rx="8" class="f-inset s-border" />
+    <text x="482" y="197" text-anchor="middle" class="svg-label">shard 2</text>
+    <rect x="540" y="170" width="88" height="46" rx="8" class="f-inset s-border" />
+    <text x="584" y="197" text-anchor="middle" class="svg-label">shard 3</text>
+    <line x1="452" y1="92" x2="384" y2="166" class="s-ok" stroke-width="2" marker-end="url(#shard-arr-ok)" />
+    <line x1="482" y1="92" x2="482" y2="166" class="s-ok" stroke-width="2" marker-end="url(#shard-arr-ok)" />
+    <line x1="512" y1="92" x2="580" y2="166" class="s-ok" stroke-width="2" marker-end="url(#shard-arr-ok)" />
+    <text x="380" y="236" text-anchor="middle" class="svg-label small muted">~33%</text>
+    <text x="482" y="236" text-anchor="middle" class="svg-label small muted">~33%</text>
+    <text x="584" y="236" text-anchor="middle" class="svg-label small muted">~33%</text>
+  </svg>
+</Diagram>
+
+The simulation below lets you feel both failure modes. Feed **sequential keys into range sharding** and watch the last shard saturate while the others idle; flip to **hash sharding** with the same stream and watch it flatten; then **trigger a reshard** under each scheme and compare how many keys move — naive hashing reshuffles nearly everything, the problem Consistent Hashing exists to fix.
+
+<ShardingSim client:visible />
+
+## The shard key: the decision you can't take back
+
+The shard key gets baked into every query, every index, and the physical location of every row. Changing it later means rewriting the entire dataset while serving traffic — teams routinely spend quarters on it. Judge a candidate key on three criteria:
+
+1. **Cardinality.** Enough distinct values to spread across far more shards than you'll ever have. `country` (about 200 values, wildly skewed) fails; `user_id` (millions) passes.
+2. **Write distribution.** Load should spread across key values *at any instant*, not just in aggregate.
+3. **Query alignment.** Your dominant queries should include the key, so they route to one shard.
+
+Worked example — a `posts` table for a social app. `created_at` looks tempting but fails criterion 2 catastrophically: at any moment, all inserts carry roughly *now* as their key, so under range sharding one shard takes 100% of writes; hashing the timestamp fixes writes but then "this user's recent posts" hits every shard. `user_id` wins on all three: millions of values, writes spread across whoever's posting, and the dominant query — fetch one user's posts — lands on one shard, where a local index on `(user_id, created_at)` makes the recency scan cheap. This is why Instagram sharded Postgres by user, and why DynamoDB pushes you to query through its partition key.
+
+## Hot keys
+
+A good key distributes *keys* evenly; it can't make the traffic behind each key even. One celebrity account with 100M followers generates orders of magnitude more reads and fan-out writes than a median user — all landing on that key's shard. DynamoDB makes the ceiling concrete: each physical partition serves at most 3,000 read units and 1,000 write units per second regardless of the table's total throughput. A viral key throttles at that cap while the rest of the fleet idles.
+
+Mitigations, in escalating order of effort:
+
+- **Cache in front.** A hot key is by definition cacheable; a single Redis node absorbing reads for the top 0.1% of keys often ends the problem.
+- **Salting / key splitting.** Rewrite the hot key `celeb42` as `celeb42#0` through `celeb42#15`, spreading its rows over 16 shards. Writes pick a random suffix; reads fan out to all 16 and merge. That trades one hot shard for 16x read amplification — apply it only to keys measured hot.
+- **Isolate.** Move the key to dedicated hardware via a directory entry. Crude, effective, operationally annoying.
+
+## Cross-shard pain
+
+Everything a single-node database does across rows gets expensive when the rows live on different machines.
+
+**Scatter-gather queries.** Any query that omits the shard key must be sent to all N shards and merged. Latency becomes the *slowest* shard's response — with 100 shards, the chance every shard beats its own p99 is 0.99^100, about 37%, so nearly two-thirds of scatter queries eat at least one shard's worst-1% latency. Throughput suffers too: one logical query consumes N shards' worth of work.
+
+**Distributed transactions.** A transaction spanning shards needs two-phase commit — extra round trips and locks held across them (the ACID page covers 2PC and why it blocks). Most sharded systems forbid cross-shard transactions or make them slow enough that schemas contort to keep each transaction on one shard — e.g., colocating a user's orders with the user.
+
+**Secondary indexes.** A *local* index lives on each shard and only covers that shard's rows, so querying by a non-key column is a scatter-gather. A *global* index is itself sharded by the indexed column — reads become targeted, but now every write updates two shards, which is why DynamoDB's global secondary indexes are updated asynchronously and read slightly stale.
+
+## Resharding
+
+Load grows; shard counts must change. Two strategies keep that survivable:
+
+**Pre-split into many logical shards.** Create far more logical shards than physical machines on day one — thousands, not tens — and map many-to-one onto hardware. Growing capacity then means *moving whole logical shards*, never re-partitioning data. Instagram ran thousands of logical shards as Postgres schemas across a few dozen machines, and embedded a 13-bit shard ID inside every 64-bit post ID so any ID is self-routing forever. Vitess reshards by splitting a shard's keyspace range in two, copying rows and tailing the replication log until the new shards catch up, then cutting over in seconds. DynamoDB does the same invisibly, splitting any partition that passes roughly 10 GB or its throughput cap.
+
+**Consistent hashing** attacks the other half of the problem — making `hash(key) mod N` stop reshuffling nearly every key when N changes — and has its own page; the short version is that adding one node should move about 1/N of the keys, not all of them.
+
+## The routing tier
+
+Something must translate `user_id 8412` into "shard 7, currently on host db-23." Three common homes for that logic:
+
+- **Smart client** — the shard map ships inside the application (or is derivable, as with Instagram's embedded shard IDs). Zero extra hops, but every client must learn topology changes.
+- **Proxy tier** — a stateless router like Vitess's `vtgate` or MongoDB's `mongos` speaks the database protocol, consults the shard map, and forwards. Clients stay dumb; you add one in-datacenter hop, well under a millisecond.
+- **Coordinator nodes** — every database node can route, forwarding queries it doesn't own, as Cassandra does.
+
+In all three, the map lives in a small strongly-consistent store — etcd, ZooKeeper, or a config database — and routers cache it. During a shard move the map marks the range as migrating so routers can double-write or redirect.
+
+<Diagram caption="A routing tier resolves each key to its shard using a cached shard map, watched from a small consistent store.">
+  <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="An app server sends a query for user 8412 to a routing tier. The router watches a shard-map store for changes and forwards the query to shard 1, with inactive routes to shards 0 and 2 shown dashed.">
+    <defs>
+      <marker id="route-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-accent" />
+      </marker>
+      <marker id="route-arr-muted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <rect x="230" y="20" width="160" height="50" rx="8" class="f-inset s-border" />
+    <text x="310" y="41" text-anchor="middle" class="svg-label">shard-map store</text>
+    <text x="310" y="59" text-anchor="middle" class="svg-label small muted">etcd / ZooKeeper</text>
+    <rect x="20" y="125" width="120" height="52" rx="8" class="f-inset s-border" />
+    <text x="80" y="155" text-anchor="middle" class="svg-label">app server</text>
+    <rect x="230" y="123" width="160" height="56" rx="8" class="f-inset s-accent" stroke-width="2" />
+    <text x="310" y="147" text-anchor="middle" class="svg-label">routing tier</text>
+    <text x="310" y="165" text-anchor="middle" class="svg-label small muted">cached shard map</text>
+    <rect x="490" y="30" width="130" height="50" rx="8" class="f-inset s-border" />
+    <text x="555" y="59" text-anchor="middle" class="svg-label">shard 0</text>
+    <rect x="490" y="125" width="130" height="50" rx="8" class="f-inset s-border" />
+    <text x="555" y="154" text-anchor="middle" class="svg-label">shard 1</text>
+    <rect x="490" y="220" width="130" height="50" rx="8" class="f-inset s-border" />
+    <text x="555" y="249" text-anchor="middle" class="svg-label">shard 2</text>
+    <line x1="140" y1="151" x2="224" y2="151" class="s-accent" stroke-width="2" marker-end="url(#route-arr)" />
+    <text x="182" y="141" text-anchor="middle" class="svg-label small muted">user 8412</text>
+    <line x1="310" y1="123" x2="310" y2="76" class="s-muted" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#route-arr-muted)" />
+    <text x="322" y="100" class="svg-label small muted">watch for changes</text>
+    <line x1="390" y1="150" x2="484" y2="150" class="s-accent" stroke-width="2" marker-end="url(#route-arr)" />
+    <text x="437" y="140" text-anchor="middle" class="svg-label small">owner</text>
+    <line x1="390" y1="136" x2="484" y2="62" class="s-border" stroke-dasharray="4 4" />
+    <line x1="390" y1="166" x2="484" y2="240" class="s-border" stroke-dasharray="4 4" />
+  </svg>
+</Diagram>
+
+## Trade-offs and pitfalls
+
+- **Sharding too early.** You permanently give up cheap joins, transactions, and unique constraints across the dataset, and take on a routing tier and per-shard migrations. A well-tuned single primary with replicas handles more than most teams expect.
+- **Sharding by time.** The most common self-inflicted hot shard. If you must keep time-locality, compound the key — hash prefix first, time second — so writes spread but per-entity scans stay ordered.
+- **Too few shards.** Doubling 4 physical shards means splitting live data. Pre-split logically; moving a whole logical shard is a file copy, splitting one is a migration project.
+- **Unmonitored key skew.** Uniform hashing does not mean uniform load. Track per-shard write throughput and per-key heat from day one; celebrities appear without warning.
+- **ORMs that silently scatter.** A query missing the shard key doesn't fail — it fans out to every shard and gets slow at the tail. Make scatter-gather loud: log it, alert on it, or require an explicit opt-in flag.
+
+## When to reach for it
+
+Exhaust the cheaper levers first: vertical scaling, read replicas, caching, vertical partitioning, archiving cold data. Reach for sharding when the *write path or raw size* — not reads — exceeds one machine: sustained writes beyond what a single primary commits comfortably, or a dataset one node can't store, back up, or restore in acceptable time (a multi-terabyte table whose restore takes a day is an availability problem). When you do: derive the shard key from your dominant access pattern, pre-split into many logical shards, and put the routing map in one authoritative place. The scheme you pick is the easy part; the key you pick is forever.

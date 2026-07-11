@@ -216,7 +216,7 @@ function stepWorld(w: World, dtMs: number, pattern: Pattern): void {
     fk.t += dtMs / FALL_MS;
     // Home toward the current owner shard so live param changes retarget mid-flight.
     const cx = shardCenterX(w.n, shardOf(w, fk.hash, fk.sortVal));
-    fk.x += (cx - fk.x) * Math.min(1, dtMs / 160);
+    fk.x += (cx - fk.x) * (1 - Math.exp(-dtMs / 160));
     const e = Math.min(1, fk.t);
     fk.y = FALL_Y0 + (DELIVER_Y - FALL_Y0) * e * e;
     if (fk.t >= 1) deliver(w, fk);
