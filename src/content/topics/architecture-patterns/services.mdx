@@ -2,8 +2,168 @@
 title: "Services in System Design"
 category: architecture-patterns
 tier: written
-summary: "Drawing service boundaries: monoliths, microservices, and the coupling trade-offs between them."
+summary: "Drawing service boundaries — monolith, modular monolith, microservices — and why data ownership, not technology, decides where the lines go."
 order: 2
 resources: [services-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+Pick the wrong database and you can migrate off it in a quarter. Draw the wrong service boundaries and they follow you for years, because boundaries harden into team structures, API contracts, and data ownership that every future change must negotiate. How you split a system into services determines your delivery velocity more than any technology choice you will make — which is why the question deserves more rigor than "monoliths are legacy, microservices are modern."
+
+## The spectrum
+
+There are not two options but a spectrum, and the middle point is the most underrated.
+
+A **monolith** is one deployable: one build, one release, one process (scaled horizontally as identical copies). Function calls between modules cost nanoseconds and cannot fail independently. One database means real ACID transactions across the whole domain — see ACID Transactions for the mechanics. Refactoring across module lines is an IDE operation, not a cross-team negotiation. The pain arrives with scale of *people*, not traffic: fifty engineers in one codebase contend for the release train, a memory leak anywhere restarts everything, and the hottest 5 percent of the code forces you to scale the other 95 percent with it.
+
+A **modular monolith** keeps the single deployable but enforces internal boundaries: modules expose narrow interfaces, tooling fails the build when module A reaches into module B's internals, and each module keeps its tables private by convention. Shopify runs one of the largest Rails codebases in existence this way — millions of lines, over a thousand engineers, flash-sale traffic — as a "componentized" monolith rather than a service mesh.
+
+**Microservices** make each boundary a process boundary: independent deploys, independent scaling, independent failure. The price is that every in-process call becomes a network hop (0.5–10 ms plus serialization, versus nanoseconds), every cross-service write becomes a distributed-consistency problem, every interface becomes a versioned contract you can never change unilaterally, and every service adds an on-call surface: discovery, tracing, dashboards, deploy pipeline.
+
+| | Monolith | Modular monolith | Microservices |
+|---|---|---|---|
+| **Deploy** | one artifact, one pipeline | one artifact, one pipeline | pipeline per service, independent cadence |
+| **Transactions** | real ACID across the domain | real ACID across the domain | distributed — sagas, eventual consistency |
+| **Scaling** | whole app scales as one unit | whole app scales as one unit | each service sized to its own load |
+| **Team autonomy** | shared codebase, merge contention | owned modules, shared release train | full — own repo, own deploys, own pace |
+| **Ops cost** | one thing to run and watch | one thing to run and watch | discovery, tracing, contracts, on-call × N |
+
+<Diagram caption="The spectrum: same modules, three boundary strengths. The modular monolith buys hard seams without paying for the network.">
+  <svg viewBox="0 0 660 290" width="100%" role="img" aria-label="Three architectures side by side: a monolith with fuzzy internal modules over one database, a modular monolith with enforced module boundaries over one database, and microservices as separate deployables each with its own database, connected by network hops.">
+    <defs>
+      <marker id="svcArrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-accent" />
+      </marker>
+    </defs>
+    <text x="110" y="28" text-anchor="middle" class="svg-label">monolith</text>
+    <text x="330" y="28" text-anchor="middle" class="svg-label">modular monolith</text>
+    <text x="542" y="28" text-anchor="middle" class="svg-label">microservices</text>
+    <rect x="20" y="42" width="180" height="136" rx="8" class="f-inset s-border" />
+    <rect x="40" y="56" width="140" height="28" rx="6" class="f-raised s-border" stroke-dasharray="3 3" />
+    <text x="110" y="74" text-anchor="middle" class="svg-label small">orders</text>
+    <rect x="40" y="94" width="140" height="28" rx="6" class="f-raised s-border" stroke-dasharray="3 3" />
+    <text x="110" y="112" text-anchor="middle" class="svg-label small">billing</text>
+    <rect x="40" y="132" width="140" height="28" rx="6" class="f-raised s-border" stroke-dasharray="3 3" />
+    <text x="110" y="150" text-anchor="middle" class="svg-label small">catalog</text>
+    <line x1="110" y1="178" x2="110" y2="200" class="s-border" />
+    <rect x="50" y="202" width="120" height="34" rx="16" class="f-inset s-border" />
+    <text x="110" y="223" text-anchor="middle" class="svg-label small">one database</text>
+    <text x="110" y="264" text-anchor="middle" class="svg-label small muted">fuzzy internal seams</text>
+    <rect x="240" y="42" width="180" height="136" rx="8" class="f-inset s-border" />
+    <rect x="260" y="56" width="140" height="28" rx="6" class="f-raised s-accent" />
+    <text x="330" y="74" text-anchor="middle" class="svg-label small">orders</text>
+    <rect x="260" y="94" width="140" height="28" rx="6" class="f-raised s-accent" />
+    <text x="330" y="112" text-anchor="middle" class="svg-label small">billing</text>
+    <rect x="260" y="132" width="140" height="28" rx="6" class="f-raised s-accent" />
+    <text x="330" y="150" text-anchor="middle" class="svg-label small">catalog</text>
+    <line x1="330" y1="178" x2="330" y2="200" class="s-border" />
+    <rect x="270" y="202" width="120" height="34" rx="16" class="f-inset s-border" />
+    <text x="330" y="223" text-anchor="middle" class="svg-label small">one database</text>
+    <text x="330" y="264" text-anchor="middle" class="svg-label small muted">enforced module APIs</text>
+    <rect x="460" y="50" width="104" height="30" rx="6" class="f-raised s-accent-2" />
+    <text x="512" y="69" text-anchor="middle" class="svg-label small">orders</text>
+    <rect x="576" y="51" width="48" height="28" rx="10" class="f-inset s-border" />
+    <text x="600" y="69" text-anchor="middle" class="svg-label small">db</text>
+    <line x1="564" y1="65" x2="576" y2="65" class="s-border" />
+    <rect x="460" y="106" width="104" height="30" rx="6" class="f-raised s-accent-2" />
+    <text x="512" y="125" text-anchor="middle" class="svg-label small">billing</text>
+    <rect x="576" y="107" width="48" height="28" rx="10" class="f-inset s-border" />
+    <text x="600" y="125" text-anchor="middle" class="svg-label small">db</text>
+    <line x1="564" y1="121" x2="576" y2="121" class="s-border" />
+    <rect x="460" y="162" width="104" height="30" rx="6" class="f-raised s-accent-2" />
+    <text x="512" y="181" text-anchor="middle" class="svg-label small">catalog</text>
+    <rect x="576" y="163" width="48" height="28" rx="10" class="f-inset s-border" />
+    <text x="600" y="181" text-anchor="middle" class="svg-label small">db</text>
+    <line x1="564" y1="177" x2="576" y2="177" class="s-border" />
+    <line x1="512" y1="80" x2="512" y2="102" class="s-accent" stroke-dasharray="4 3" marker-end="url(#svcArrA)" />
+    <text x="520" y="96" text-anchor="start" class="svg-label small muted">network</text>
+    <line x1="512" y1="136" x2="512" y2="158" class="s-accent" stroke-dasharray="4 3" marker-end="url(#svcArrA)" />
+    <text x="542" y="264" text-anchor="middle" class="svg-label small muted">deploy and scale per service</text>
+  </svg>
+</Diagram>
+
+## You ship your org chart
+
+Conway's law (1968): a system's structure mirrors the communication structure of the organization that builds it. It cuts both ways. Boundaries that cross team lines generate constant coordination overhead; boundaries that match team lines let each team move at its own speed. Amazon exploited this deliberately — two-pizza teams, each owning a service end to end ("you build it, you run it"), with the early-2000s API mandate forcing all inter-team access through service interfaces. The services worked because the teams were shaped first.
+
+The practical heuristics for where to cut, in rough priority order:
+
+1. **Bounded contexts** — DDD-lite: a boundary is good where the vocabulary changes. "Order" means different things to checkout and to fulfillment; that seam is real.
+2. **Team ownership** — one service, one owning team. A service owned by three teams has three roadmaps and no owner.
+3. **Rate of change** — code that changes together should live together. Splitting two modules that always change in lockstep converts every feature into a two-repo, two-deploy dance.
+4. **Data ownership** — the decisive one, below.
+
+## Data ownership is the real boundary
+
+The rule: **each service owns its database, and no other service touches it**. Other services get the data through the owner's API or its published events (Sync vs Async covers those mechanics). The schema stays private, so the owner can refactor tables, add indexes, or shard (see Sharding and Partitioning) without asking anyone.
+
+The corresponding anti-pattern is **integration through a shared database**: several "services" reading and writing the same tables. The schema becomes a frozen public contract — every migration needs sign-off from every reader, every hot query from one service degrades the others, and you have all the operational cost of separate deployables with none of the autonomy. Split processes that share a database are not services; they are a monolith with extra steps.
+
+<Diagram caption="Shared-database integration freezes the schema into a public contract; database-per-service keeps it private behind an API.">
+  <svg viewBox="0 0 660 270" width="100%" role="img" aria-label="Left: three services all reading and writing one shared database, marked as an anti-pattern. Right: three services each owning a private database and integrating through APIs.">
+    <defs>
+      <marker id="svcArrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-danger" />
+      </marker>
+      <marker id="svcArrC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-ok" />
+      </marker>
+    </defs>
+    <text x="164" y="26" text-anchor="middle" class="svg-label">shared database (anti-pattern)</text>
+    <text x="495" y="26" text-anchor="middle" class="svg-label">database per service</text>
+    <line x1="330" y1="16" x2="330" y2="250" class="s-border" stroke-dasharray="4 4" />
+    <rect x="22" y="44" width="84" height="32" rx="6" class="f-raised s-border" />
+    <text x="64" y="64" text-anchor="middle" class="svg-label small">orders</text>
+    <rect x="122" y="44" width="84" height="32" rx="6" class="f-raised s-border" />
+    <text x="164" y="64" text-anchor="middle" class="svg-label small">billing</text>
+    <rect x="222" y="44" width="84" height="32" rx="6" class="f-raised s-border" />
+    <text x="264" y="64" text-anchor="middle" class="svg-label small">catalog</text>
+    <line x1="64" y1="76" x2="148" y2="164" class="s-danger" stroke-width="1.5" marker-end="url(#svcArrB)" />
+    <line x1="164" y1="76" x2="164" y2="164" class="s-danger" stroke-width="1.5" marker-end="url(#svcArrB)" />
+    <line x1="264" y1="76" x2="180" y2="164" class="s-danger" stroke-width="1.5" marker-end="url(#svcArrB)" />
+    <rect x="104" y="170" width="120" height="40" rx="16" class="f-inset s-danger" />
+    <text x="164" y="194" text-anchor="middle" class="svg-label small">shared schema</text>
+    <text x="164" y="240" text-anchor="middle" class="svg-label small muted">every migration risks all three</text>
+    <rect x="352" y="44" width="80" height="32" rx="6" class="f-raised s-border" />
+    <text x="392" y="64" text-anchor="middle" class="svg-label small">orders</text>
+    <rect x="462" y="44" width="80" height="32" rx="6" class="f-raised s-border" />
+    <text x="502" y="64" text-anchor="middle" class="svg-label small">billing</text>
+    <rect x="572" y="44" width="80" height="32" rx="6" class="f-raised s-border" />
+    <text x="612" y="64" text-anchor="middle" class="svg-label small">catalog</text>
+    <text x="447" y="54" text-anchor="middle" class="svg-label small muted">API</text>
+    <line x1="432" y1="62" x2="458" y2="62" class="s-ok" stroke-width="1.5" marker-end="url(#svcArrC)" />
+    <text x="557" y="54" text-anchor="middle" class="svg-label small muted">API</text>
+    <line x1="542" y1="62" x2="568" y2="62" class="s-ok" stroke-width="1.5" marker-end="url(#svcArrC)" />
+    <line x1="392" y1="76" x2="392" y2="128" class="s-border" />
+    <line x1="502" y1="76" x2="502" y2="128" class="s-border" />
+    <line x1="612" y1="76" x2="612" y2="128" class="s-border" />
+    <rect x="356" y="130" width="72" height="30" rx="12" class="f-inset s-ok" />
+    <text x="392" y="149" text-anchor="middle" class="svg-label small">db</text>
+    <rect x="466" y="130" width="72" height="30" rx="12" class="f-inset s-ok" />
+    <text x="502" y="149" text-anchor="middle" class="svg-label small">db</text>
+    <rect x="576" y="130" width="72" height="30" rx="12" class="f-inset s-ok" />
+    <text x="612" y="149" text-anchor="middle" class="svg-label small">db</text>
+    <text x="495" y="240" text-anchor="middle" class="svg-label small muted">schema private, contract is the API</text>
+  </svg>
+</Diagram>
+
+## The distributed monolith
+
+The worst outcome on the spectrum is not the monolith — it is the **distributed monolith**: many deployables that must still be released together because their boundaries were drawn wrong. Symptoms: a feature routinely touches four repos; services share a database or fine-grained synchronous call chains; a deploy order document exists; one service's outage cascades through the fleet. You pay microservice costs — network latency on every call, contract versioning, an API Gateway and tracing stack, per-service on-call — while keeping monolith coupling. Every property in the comparison table lands in the worse column.
+
+Segment lived this publicly. Their per-destination workers multiplied into 140-plus services and repos, shared libraries drifted out of sync across all of them, and autoscaling 140 load profiles consumed the team. In 2018 they collapsed the fleet back into a monolith and wrote up the retreat ("Goodbye Microservices"). The lesson is not "microservices bad" — it is that boundaries drawn along the wrong axis multiply, not divide, your operational load.
+
+Other recurring pitfalls: the entity service ("UserService" that every request touches, a distributed single point of failure); nano-services so small that the network chatter dwarfs the work; and splitting before the domain is understood, which guarantees the bounded contexts are guesses.
+
+## Deciding: start modular, extract on pain
+
+Default to a modular monolith. It preserves the cheap options — real transactions, atomic refactors, one pipeline — while building the module seams that make later extraction a mechanical exercise instead of an archaeology project. Extract a module into a service only when you can name the specific pain, and the pain is one of these:
+
+- **Independent scaling** — one module needs 10x the capacity or different hardware (a GPU inference path, a memory-hungry report generator) and scaling the whole artifact for it is wasteful.
+- **Team contention** — teams block each other's releases; the deploy train is the bottleneck, not the code.
+- **Fault isolation** — a defect in a peripheral module (PDF export) can take down a critical one (checkout), and process isolation is the fix.
+- **Divergent constraints** — a different language or runtime is genuinely needed, or a compliance scope (payments, PII) is cheaper to audit in isolation.
+- **The seam is already clean** — the module's data access is private and its interface is narrow. If it is not, fix the seam inside the monolith first; the network will not fix it for you.
+
+If none of those apply, the honest answer to "should we do microservices?" is not yet — and the modular monolith means "not yet" never becomes "too late."

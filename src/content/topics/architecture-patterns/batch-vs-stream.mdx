@@ -2,8 +2,134 @@
 title: "Batch vs Stream Processing"
 category: architecture-patterns
 tier: written
-summary: "Process data in scheduled chunks or as it arrives — throughput, latency, and correctness trade-offs."
+summary: "Process data in scheduled chunks or as it arrives — a freshness requirement traded against radical simplicity."
 order: 4
 resources: [batch-stream-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+
+Every data pipeline answers one question: how stale may the answer be? If "as of last night" is acceptable, you can collect data into a pile and process the pile on a schedule — batch. If the answer must reflect events from seconds ago, you must process each event as it arrives — streaming. That single freshness requirement drives the entire architecture, because the two models differ not by degree but by kind.
+
+## Bounded vs unbounded
+
+Batch processing operates on a **bounded** dataset: a file, a table partition, "all orders from yesterday." The job knows where the data ends, so it can read everything, compute, write a result, and terminate. Correctness is easy to reason about — the input is fixed, the job is a pure function over it, and if the job crashes you simply rerun it. That last property is worth underlining: **reprocessing in batch is trivial**. Found a bug in last month's revenue numbers? Fix the code, rerun the job over last month's data, overwrite the output. The raw data is still sitting there.
+
+Stream processing operates on an **unbounded** dataset: an infinite sequence of events with no end. The job never terminates; it consumes events (typically from a log like Kafka — the Message Queues topic owns that layer) and continuously updates its output. Results are fresh within seconds, but "read everything, then compute" is no longer available — the job must decide what to emit *before* all the data exists.
+
+<Diagram caption="Batch accumulates events and processes the pile on a schedule; streaming processes each event on arrival.">
+  <svg viewBox="0 0 660 270" width="100%" role="img" aria-label="Two pipelines compared: a batch pipeline where events collect all day, a nightly job reads the whole set, and results are up to 24 hours stale; and a stream pipeline where an event stream feeds a long-running processor and results are seconds fresh.">
+    <defs>
+      <marker id="bs-arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-accent" />
+      </marker>
+    </defs>
+    <text x="15" y="24" class="svg-label small muted">BATCH</text>
+    <rect x="15" y="38" width="140" height="56" rx="8" class="f-inset s-border" />
+    <text x="85" y="62" text-anchor="middle" class="svg-label">events</text>
+    <text x="85" y="80" text-anchor="middle" class="svg-label small muted">collect all day</text>
+    <line x1="155" y1="66" x2="225" y2="66" class="s-accent" stroke-width="1.5" marker-end="url(#bs-arr1)" />
+    <rect x="230" y="38" width="180" height="56" rx="8" class="f-inset s-border" />
+    <text x="320" y="62" text-anchor="middle" class="svg-label">nightly job</text>
+    <text x="320" y="80" text-anchor="middle" class="svg-label small muted">reads the whole set</text>
+    <line x1="410" y1="66" x2="480" y2="66" class="s-accent" stroke-width="1.5" marker-end="url(#bs-arr1)" />
+    <rect x="485" y="38" width="140" height="56" rx="8" class="f-inset s-ok" />
+    <text x="555" y="62" text-anchor="middle" class="svg-label">results</text>
+    <text x="555" y="80" text-anchor="middle" class="svg-label small muted">up to 24 h stale</text>
+    <text x="15" y="164" class="svg-label small muted">STREAM</text>
+    <rect x="15" y="178" width="140" height="56" rx="8" class="f-inset s-border" />
+    <text x="85" y="202" text-anchor="middle" class="svg-label">event stream</text>
+    <text x="85" y="220" text-anchor="middle" class="svg-label small muted">unbounded</text>
+    <line x1="155" y1="206" x2="225" y2="206" class="s-accent" stroke-width="1.5" marker-end="url(#bs-arr1)" />
+    <rect x="230" y="178" width="180" height="56" rx="8" class="f-inset s-border" />
+    <text x="320" y="202" text-anchor="middle" class="svg-label">stream job</text>
+    <text x="320" y="220" text-anchor="middle" class="svg-label small muted">runs forever, per event</text>
+    <line x1="410" y1="206" x2="480" y2="206" class="s-accent" stroke-width="1.5" marker-end="url(#bs-arr1)" />
+    <rect x="485" y="178" width="140" height="56" rx="8" class="f-inset s-ok" />
+    <text x="555" y="202" text-anchor="middle" class="svg-label">results</text>
+    <text x="555" y="220" text-anchor="middle" class="svg-label small muted">seconds fresh</text>
+  </svg>
+</Diagram>
+
+| | Batch | Stream |
+|---|---|---|
+| Input | Bounded (file, table, partition) | Unbounded event sequence |
+| Freshness | Equals the schedule (hourly, nightly) | Seconds |
+| Throughput per dollar | High — sequential scans, spot instances | Lower — always-on cluster, per-event overhead |
+| Reprocessing | Rerun the job | Replay the log, rebuild state |
+| Failure handling | Retry the whole job | Checkpointed state, careful recovery |
+| Complexity | Low | High — time, windows, state |
+| Typical stack | Airflow + Spark, or SQL in a warehouse | Kafka + Flink |
+
+## The problems streaming inherits
+
+The moment input is unbounded, three hard problems appear that batch simply never has.
+
+**Windowing.** An infinite stream has no natural place to emit "the count." You impose one by slicing the stream into windows: **tumbling** windows tile time into fixed non-overlapping slots (one result per 5-minute block), **sliding** windows overlap (the last 5 minutes, recomputed every 30 seconds — good for "requests per second right now"), and **session** windows group events by activity, closing after a gap of inactivity (a user's browsing session ends 30 minutes after their last click).
+
+**Event time vs processing time.** Every event has two timestamps: when it *happened* (event time) and when the processor *saw* it (processing time). They diverge constantly — a phone buffers analytics offline for an hour, a lagging Kafka partition delivers late. If you window by processing time, a network hiccup silently moves revenue into the wrong hour. Correct results require windowing by event time, which raises an ugly question: when is the 2:00–3:00 window *done*, if a 2:58 event can still arrive at 3:45?
+
+**Late data and watermarks.** The pragmatic answer is a **watermark**: the processor's rolling assertion that "I believe I have now seen everything up to time T." When the watermark passes a window's end, the window fires. Events arriving after that are *late*; you choose to drop them, or hold windows open a grace period and emit corrections. The watermark is a bet — set it aggressive and you emit fast but wrong, set it conservative and you reintroduce latency. Batch never faces this: by the time the nightly job runs, the stragglers arrived hours ago.
+
+There is a fourth inherited problem: **state**. A running count is state, and a job that runs forever will crash eventually. Flink's answer is periodic **checkpointing** — snapshot all operator state plus input offsets to durable storage, and on failure rewind to the last snapshot and replay from those offsets. Because state and read-position are restored together, each event's effect lands in state exactly once, even though events may be *processed* more than once. That's exactly-once state updates, not exactly-once delivery — outputs to external systems still need idempotent or transactional sinks (see the Idempotency topic).
+
+## Micro-batching: the middle ground
+
+Spark's Structured Streaming splits the difference: chop the stream into tiny batches (say, one per second) and run a normal batch job on each. You keep the batch engine's simplicity and throughput and get latency of a few seconds — but never lower than the batch interval, and per-event constructs like session windows and fine-grained event-time handling fit awkwardly. It is a pragmatic choice when you already run Spark and "a few seconds" is fresh enough.
+
+## Lambda vs kappa
+
+The **lambda architecture** was the early hedge: run both. A batch layer periodically recomputes exact results from the full raw dataset; a parallel speed layer streams approximate results for the most recent window; a serving layer stitches them together. It works, but the cost is structural — the *same business logic exists twice*, in two frameworks, and the two implementations drift.
+
+The **kappa architecture** deletes the batch layer: keep the raw event log (Kafka, with long or infinite retention) as the source of truth and run *only* the stream job. Reprocessing — batch's superpower — is recovered by replay: deploy the fixed job against the log from offset zero, let it race through history into a new output table, then cut over. One codebase, at the price of betting everything on your stream processor and your log retention.
+
+<Diagram caption="Lambda maintains the same logic in two layers; kappa keeps one stream job and reprocesses by replaying the log.">
+  <svg viewBox="0 0 660 355" width="100%" role="img" aria-label="Top: lambda architecture, where events fan out to a batch layer that is exact but hours stale and a speed layer that is fresh but approximate, both merged by a serving layer. Bottom: kappa architecture, where a retained log feeds one stream job into serving, and reprocessing replays the log from offset zero.">
+    <defs>
+      <marker id="bs-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-accent" />
+      </marker>
+    </defs>
+    <text x="15" y="20" class="svg-label small muted">LAMBDA — same logic, two codebases</text>
+    <rect x="15" y="70" width="110" height="50" rx="8" class="f-inset s-border" />
+    <text x="70" y="100" text-anchor="middle" class="svg-label">events</text>
+    <line x1="125" y1="85" x2="220" y2="55" class="s-accent" stroke-width="1.5" marker-end="url(#bs-arr2)" />
+    <line x1="125" y1="105" x2="220" y2="135" class="s-accent" stroke-width="1.5" marker-end="url(#bs-arr2)" />
+    <rect x="225" y="30" width="180" height="50" rx="8" class="f-inset s-border" />
+    <text x="315" y="51" text-anchor="middle" class="svg-label">batch layer</text>
+    <text x="315" y="68" text-anchor="middle" class="svg-label small muted">exact, hours stale</text>
+    <rect x="225" y="112" width="180" height="50" rx="8" class="f-inset s-border" />
+    <text x="315" y="133" text-anchor="middle" class="svg-label">speed layer</text>
+    <text x="315" y="150" text-anchor="middle" class="svg-label small muted">fresh, approximate</text>
+    <line x1="405" y1="55" x2="490" y2="85" class="s-accent" stroke-width="1.5" marker-end="url(#bs-arr2)" />
+    <line x1="405" y1="137" x2="490" y2="107" class="s-accent" stroke-width="1.5" marker-end="url(#bs-arr2)" />
+    <rect x="495" y="70" width="150" height="50" rx="8" class="f-inset s-accent" />
+    <text x="570" y="91" text-anchor="middle" class="svg-label">serving</text>
+    <text x="570" y="108" text-anchor="middle" class="svg-label small muted">merge both views</text>
+    <text x="15" y="222" class="svg-label small muted">KAPPA — one codebase, replayable log</text>
+    <rect x="15" y="248" width="150" height="50" rx="8" class="f-inset s-border" />
+    <text x="90" y="269" text-anchor="middle" class="svg-label">log (Kafka)</text>
+    <text x="90" y="286" text-anchor="middle" class="svg-label small muted">long retention</text>
+    <line x1="165" y1="273" x2="255" y2="273" class="s-accent" stroke-width="1.5" marker-end="url(#bs-arr2)" />
+    <rect x="260" y="248" width="160" height="50" rx="8" class="f-inset s-border" />
+    <text x="340" y="278" text-anchor="middle" class="svg-label">stream job</text>
+    <line x1="420" y1="273" x2="490" y2="273" class="s-accent" stroke-width="1.5" marker-end="url(#bs-arr2)" />
+    <rect x="495" y="248" width="150" height="50" rx="8" class="f-inset s-accent" />
+    <text x="570" y="278" text-anchor="middle" class="svg-label">serving</text>
+    <path d="M 320 298 C 285 330, 140 330, 95 302" fill="none" class="s-muted" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#bs-arr2)" />
+    <text x="207" y="345" text-anchor="middle" class="svg-label small muted">reprocess = replay from offset 0</text>
+  </svg>
+</Diagram>
+
+## Trade-offs and pitfalls
+
+- **Streaming's cost is permanent.** A batch job rents compute for an hour a day; a stream job holds a cluster, its state, and an on-call rotation 24/7. Budget roughly an order of magnitude more operational effort for the same logic.
+- **Processing-time windows look fine until they don't.** They pass every test, then a consumer backlog or a mobile-client sync shifts events across window boundaries in production. If the result feeds anything financial, window by event time from day one.
+- **Watermark tuning is a correctness dial disguised as a config value.** Dropped late events are silently missing revenue; overly patient watermarks quietly turn your "real-time" pipeline into a minutes-late one.
+- **Kappa replay is not free.** Replaying a year of events through a job sized for the live rate can take days; reprocessing needs to be rehearsed and provisioned, not assumed.
+- **Lambda's dual codebases drift.** When batch and speed layers disagree, you get the worst debugging session available: two implementations of the same spec, each plausibly wrong.
+- **"Real-time" is often a reflex, not a requirement.** Ask who consumes the result and how fast they can act. A dashboard checked each morning does not need a Flink cluster.
+
+## Choosing
+
+Let the freshness requirement choose, and **default to batch** — it is radically simpler, and a nightly Airflow-plus-Spark (or plain warehouse SQL — the Databases topic covers that side) pipeline is understood, debugged, and rerun by any engineer on the team. Move to streaming only when someone can act on a result within seconds of the event: fraud detection that must block the transaction, live operational dashboards, real-time personalization. Billing, invoicing, reporting, and ML training data are batch almost everywhere — correctness and reprocessability matter more than freshness. If you need "fresh-ish" and already run Spark, micro-batching buys seconds-level latency cheaply. And if you do go streaming, prefer kappa with generous log retention over lambda: one codebase whose reprocessing story is "replay the log" beats two codebases whose reconciliation story is "hope."

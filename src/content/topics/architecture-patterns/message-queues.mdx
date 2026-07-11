@@ -7,4 +7,137 @@ order: 1
 sim: MessageQueuesSim
 resources: [message-queues-video]
 ---
-> **Coming soon.** This page is a stub — the full interactive walkthrough lands in an upcoming content wave.
+
+import Diagram from '../../../components/Diagram.astro';
+import MessageQueuesSim from '../../../components/sims/MessageQueuesSim';
+
+A synchronous call couples two services in three ways at once: both must be up at the same moment, the caller must know where the callee is, and the caller can only go as fast as the callee responds. A message queue breaks all three couplings. The producer appends a message and moves on in a few milliseconds; the consumer pulls it whenever it is ready; the queue absorbs any difference between the two rates. That buffer is the entire value — and, unmanaged, the entire danger.
+
+## Decoupling in time, space, and rate
+
+Put a queue between an order service and an email service and three things change. **Time:** the email service can be down for ten minutes and no order is lost — messages wait. **Space:** the producer addresses a queue name, not a host; consumers can move, scale, or be rewritten without the producer noticing. **Rate:** a checkout burst of 1,000 orders per second does not force the email service to send 1,000 emails per second; it drains the queue at its own pace.
+
+Two delivery topologies cover almost every use. A **point-to-point queue** delivers each message to exactly one of its consumers — work distribution, like a pool of workers resizing images. A **pub/sub topic** delivers each message to every subscriber — fan-out, like an `order-placed` event feeding email, analytics, and inventory independently. Kafka unifies the two with **consumer groups**: within a group, partitions are divided among members (queue semantics); separate groups each get the full stream (pub/sub semantics).
+
+<Diagram caption="Producers enqueue and move on; a consumer group divides the work; unacknowledged or poison messages route to a dead-letter queue.">
+  <svg viewBox="0 0 680 320" width="100%" role="img" aria-label="Two producers send messages into a queue; two consumers in a group pull messages and send acks back; repeatedly failing messages go to a dead-letter queue below">
+    <defs>
+      <marker id="mq-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-muted" />
+      </marker>
+      <marker id="mq-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-ok" />
+      </marker>
+      <marker id="mq-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-danger" />
+      </marker>
+    </defs>
+    <rect x="16" y="56" width="116" height="46" rx="8" class="f-inset s-border" />
+    <text x="74" y="84" text-anchor="middle" class="svg-label">producer A</text>
+    <rect x="16" y="140" width="116" height="46" rx="8" class="f-inset s-border" />
+    <text x="74" y="168" text-anchor="middle" class="svg-label">producer B</text>
+    <line x1="132" y1="79" x2="196" y2="110" class="s-muted" stroke-width="1.5" marker-end="url(#mq-arr)" />
+    <line x1="132" y1="163" x2="196" y2="132" class="s-muted" stroke-width="1.5" marker-end="url(#mq-arr)" />
+    <rect x="202" y="88" width="236" height="66" rx="8" class="f-inset s-border" />
+    <rect x="220" y="106" width="26" height="30" rx="4" class="f-accent" />
+    <rect x="254" y="106" width="26" height="30" rx="4" class="f-accent" />
+    <rect x="288" y="106" width="26" height="30" rx="4" class="f-accent-dim" />
+    <rect x="322" y="106" width="26" height="30" rx="4" class="f-accent-dim" />
+    <text x="320" y="80" text-anchor="middle" class="svg-label muted">queue (buffered messages)</text>
+    <rect x="530" y="56" width="134" height="46" rx="8" class="f-inset s-border" />
+    <text x="597" y="84" text-anchor="middle" class="svg-label">consumer 1</text>
+    <rect x="530" y="140" width="134" height="46" rx="8" class="f-inset s-border" />
+    <text x="597" y="168" text-anchor="middle" class="svg-label">consumer 2</text>
+    <line x1="438" y1="110" x2="524" y2="79" class="s-muted" stroke-width="1.5" marker-end="url(#mq-arr)" />
+    <line x1="438" y1="132" x2="524" y2="163" class="s-muted" stroke-width="1.5" marker-end="url(#mq-arr)" />
+    <line x1="530" y1="98" x2="440" y2="98" class="s-ok" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#mq-ok)" />
+    <text x="484" y="60" text-anchor="middle" class="svg-label small">ack after processing</text>
+    <line x1="320" y1="154" x2="320" y2="234" class="s-danger" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#mq-bad)" />
+    <text x="416" y="216" text-anchor="middle" class="svg-label small">fails N deliveries</text>
+    <rect x="236" y="240" width="168" height="46" rx="8" class="f-inset s-danger" />
+    <text x="320" y="268" text-anchor="middle" class="svg-label">dead-letter queue</text>
+  </svg>
+</Diagram>
+
+## Acks, visibility timeouts, and redelivery
+
+The queue cannot know a message was processed unless the consumer says so. The core loop is: consumer receives a message, does the work, then sends an **acknowledgement**; only then does the broker delete it. If the consumer crashes mid-work, the ack never arrives and the broker redelivers the message to another consumer. Ack placement is the whole game — ack *before* processing and a crash loses the message; ack *after* and a crash duplicates it.
+
+SQS makes the redelivery mechanism explicit with a **visibility timeout**. When a consumer receives a message, it is not deleted — it becomes invisible to other consumers for a window (default 30 seconds). Delete it within the window and it is gone for good; miss the window and it reappears for redelivery. Set the timeout shorter than your actual processing time and you get guaranteed duplicates: the message becomes visible again *while the first consumer is still working on it*.
+
+<Diagram caption="Visibility timeout: a received message is hidden, not deleted; the ack must beat the clock.">
+  <svg viewBox="0 0 680 230" width="100%" role="img" aria-label="Timeline of a message: delivered at left, invisible during the visibility timeout window, then either deleted on ack or made visible again and redelivered when the timeout expires">
+    <defs>
+      <marker id="vt-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-muted" />
+      </marker>
+      <marker id="vt-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-ok" />
+      </marker>
+      <marker id="vt-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="f-danger" />
+      </marker>
+    </defs>
+    <line x1="40" y1="120" x2="640" y2="120" class="s-muted" stroke-width="1.5" marker-end="url(#vt-arr)" />
+    <text x="636" y="144" text-anchor="end" class="svg-label small muted">time</text>
+    <line x1="100" y1="108" x2="100" y2="132" class="s-text" stroke-width="2" />
+    <text x="100" y="160" text-anchor="middle" class="svg-label small">delivered</text>
+    <rect x="100" y="72" width="300" height="32" rx="6" class="f-accent-dim" />
+    <text x="250" y="92" text-anchor="middle" class="svg-label small">invisible: visibility timeout</text>
+    <line x1="400" y1="108" x2="400" y2="132" class="s-text" stroke-width="2" />
+    <text x="400" y="160" text-anchor="middle" class="svg-label small">timeout expires</text>
+    <line x1="330" y1="72" x2="330" y2="40" class="s-ok" stroke-width="1.5" marker-end="url(#vt-ok)" />
+    <text x="330" y="28" text-anchor="middle" class="svg-label small">ack in time: deleted</text>
+    <line x1="400" y1="132" x2="470" y2="190" class="s-danger" stroke-width="1.5" marker-end="url(#vt-bad)" />
+    <text x="482" y="196" text-anchor="start" class="svg-label small">no ack: redelivered</text>
+  </svg>
+</Diagram>
+
+Redelivery has a failure mode: the **poison message** — malformed payload, a bug triggered by one specific record — that crashes every consumer that touches it. Without intervention it redelivers forever, burning a consumer slot each cycle. The fix is a **dead-letter queue**: after N failed deliveries (SQS calls this `maxReceiveCount`, typically 3–5), the broker shunts the message to a side queue for humans to inspect. A DLQ with messages in it is an alarm, not a trash can — every entry is a request a user made that silently did not happen.
+
+Try these in the simulation below: fire a traffic spike and watch depth rise while producers stay unaffected, then watch consumers drain the backlog after the spike ends. Kill a consumer mid-load and watch both depth and the age of the oldest message climb — age is the number your users feel. Then drop the visibility timeout below the processing time and count the duplicate deliveries.
+
+<MessageQueuesSim client:visible />
+
+## Delivery guarantees
+
+| Guarantee | Mechanism | What goes wrong | Cost |
+| --- | --- | --- | --- |
+| At-most-once | Ack (or delete) before processing | Crash after ack loses the message | Cheapest; fine for metrics, telemetry |
+| At-least-once | Ack after processing; redeliver on timeout | Crash after processing, before ack, duplicates it | Consumers must tolerate duplicates |
+| Exactly-once | Transactions + idempotent producer (Kafka), dedup windows (SQS FIFO) | Guarantee ends at the broker's boundary | Throughput hit; false comfort if misread |
+
+The exactly-once caveat deserves emphasis: Kafka's transactions make a consume-transform-produce loop exactly-once *within Kafka*. The moment your consumer calls an external API, charges a card, or writes to a non-participating database, you are back to at-least-once, because the side effect and the ack cannot commit atomically. The production pattern is **effectively-once**: accept at-least-once delivery and make the consumer idempotent, so duplicates are harmless. How to build idempotent handlers is its own topic (Idempotency).
+
+## Ordering
+
+Global ordering across a queue with concurrent consumers is fiction: two consumers processing in parallel finish in whatever order the scheduler decides, and a redelivered message arrives after messages that were sent later. Brokers therefore scope ordering. Kafka guarantees order **per partition** — all events for `user-42` hash to one partition and replay in write order, while different users interleave arbitrarily. SQS FIFO does the same per message group at a throughput cost (300 messages/s per queue without batching, versus effectively unlimited for standard queues). If you think you need global ordering, you usually need per-key ordering plus a version number.
+
+## Backpressure: depth and age are the health metrics
+
+A queue does not remove overload; it *relocates* it. If producers sustain 1,000 messages/s and consumers sustain 800/s, the queue grows by 200/s forever — an unbounded queue converts overload into delayed failure, at the moment of maximum traffic, with hours of stale work still buffered ahead of fresh work.
+
+So the two metrics that matter are **depth** (messages waiting) and **age of the oldest message** (how stale the head of the queue is). They are linked by Little's law: time-in-queue equals depth divided by drain rate. Depth alone can mislead — 50,000 queued messages is fine at 10,000/s drain (5 seconds of lag) and a disaster at 50/s (17 minutes). Age is what the user experiences.
+
+A worked spike: steady state is 200 messages/s in, consumers can do 400/s. A promotion fires traffic to 1,000/s for 60 seconds. The queue grows at 600/s, peaking at 36,000 messages. When the spike ends, consumers drain the surplus at 200/s (400 capacity minus 200 ongoing arrivals), taking 180 seconds to return to empty. Total user impact: the worst-placed message waits about 90 seconds (36,000 deep, drained at 400/s). No errors, no dropped orders, no autoscaling scramble — that is the queue doing its job. If the "spike" never ends, no buffer saves you: scale consumers, or shed load at the front door (Rate Limiting).
+
+## The broker landscape
+
+**RabbitMQ** is the classic *smart broker*: exchanges route messages to queues by routing key, headers, or fan-out rules; the broker tracks per-message acks and deletes on ack. Rich routing, per-message TTLs, priorities — and messages are gone once consumed.
+
+**Kafka is not a queue; it is a replicated log.** Messages are appended to partitions and retained for a configured window (days, or forever) regardless of consumption. Consumers track their own position as an **offset** and can rewind it — replay yesterday's events into a rebuilt cache, or point a brand-new service at week-old history. Deleting-on-ack versus retaining-with-offsets is *the* architectural distinction: a queue distributes work; a log records what happened. That is why Kafka underpins event sourcing and CDC pipelines, and why a single partition can push hundreds of MB/s from sequential disk I/O.
+
+**SQS** is the managed-simplicity option: no brokers to run, effectively unlimited throughput on standard queues, pay per request (about $0.40 per million after the free tier). You give up routing and replay; you gain never being paged for a broker disk filling up.
+
+## Trade-offs and pitfalls
+
+- **You traded latency and consistency for resilience.** The producer's "success" now means "enqueued", not "done". If the caller needs the answer in the response — auth checks, price quotes — a queue is the wrong tool; that boundary is covered under Sync vs Async.
+- **Debugging gets harder.** A request that fans out through three queues has no single stack trace. Budget for correlation IDs and tracing from day one.
+- **Visibility timeout mismatch** is the most common self-inflicted duplicate source: processing takes 45s, timeout is 30s, every message is handled twice.
+- **Unbounded queues hide sustained overload** until the backlog is hours deep. Alert on oldest-message age, not just depth.
+- **A silent DLQ policy** (or none) means one poison message can wedge a FIFO group or waste a consumer forever.
+- **Ordering assumptions creep in.** Any code that assumes cross-key ordering across a partitioned topic is a latent bug that appears only under rebalancing or redelivery.
+
+## When to reach for it
+
+Use a queue when the work is deferrable and the caller does not need the result in-line: sending email, generating thumbnails, syncing to a warehouse, fanning one event out to many services, or smoothing spiky writes into a fixed-capacity backend. Choose Kafka when you need replay, multiple independent readers of the same history, or event volumes in the hundreds of thousands per second; RabbitMQ when you need rich routing and per-message semantics at moderate scale; SQS when you want none of the operational burden and your needs are plain work distribution. Skip the queue entirely when the user is waiting on the answer — a queue in a synchronous path adds a hop, a failure mode, and an operational surface while removing the one thing the caller wanted: the response, now.

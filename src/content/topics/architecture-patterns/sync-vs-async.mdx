@@ -2,8 +2,140 @@
 title: "Sync vs Async"
 category: architecture-patterns
 tier: written
-summary: "Blocking calls vs fire-and-forget: how the choice ripples through latency, reliability, and complexity."
+summary: "Blocking calls vs fire-and-forget: how one choice ripples through availability, latency, consistency, and debugging."
 order: 3
 resources: [sync-async-video]
 ---
-> **Coming soon.** This page is a stub — the full write-up lands in an upcoming content wave.
+import Diagram from '../../../components/Diagram.astro';
+
+Every interaction between two services starts with one question: does the caller wait for the answer? Synchronous means yes — the caller blocks until a response arrives. Asynchronous means no — the caller hands off a message and moves on. That single choice propagates into your availability math, your latency budget, your consistency guarantees, and how you debug production at 3am.
+
+## Two ways to make a request
+
+Synchronous is the familiar shape: an HTTP or gRPC call, the caller's thread parked until the reply comes back. Simple, immediate, debuggable — one request, one stack trace, one status code.
+
+Asynchronous routes through an intermediary, usually a queue or event stream. Four interaction patterns cover most real systems:
+
+- **Request/response** — synchronous; the answer comes back on the same connection.
+- **Fire-and-forget** — the caller publishes and never looks back. Right for work whose failure the caller cannot act on anyway (analytics, log shipping).
+- **Request/async-reply** — the caller gets an immediate acknowledgment (HTTP 202 plus a job ID); the real result arrives later via a status endpoint, webhook, or push channel.
+- **Commands vs events** — a *command* ("charge this card") is addressed to one owner who must act; an *event* ("order 4412 was placed") states a fact that any number of subscribers may react to. Events invert the dependency: the producer does not know who listens.
+
+## What synchronous really costs
+
+**Availability chains.** A synchronous call succeeds only if every link succeeds, so availabilities multiply. Say checkout calls auth, pricing, payment, and fraud-check in sequence, each an honest 99.9% available. The chain delivers 0.999 to the fourth power, about 99.6% — and with your own service's 99.9% on top, roughly 99.5%. You went from about 43 minutes of downtime a month per service to about 3.6 hours for the user-facing flow — without any single team doing anything wrong. The Availability topic works this math in depth.
+
+**Latency adds serially.** Five hops at a 20ms median each is a 100ms floor before your own code runs — and tails compound worse than medians, because any single slow hop delays the whole request.
+
+**Slowness cascades.** When one dependency degrades, callers' threads pile up waiting on it, the caller's thread pool exhausts, and now *it* is down for everyone — a full outage grown from one slow service. The survival kit for synchronous calls fits in one paragraph: put a **timeout** on every call, budgeted so the whole chain finishes inside your SLA; **retry** with exponential backoff and jitter, but only operations that are safe to repeat (the Idempotency topic owns that ground); and wrap flaky dependencies in a **circuit breaker** that fails fast once error rates spike instead of letting threads queue up behind a corpse. This kit is mandatory equipment, not an optimization.
+
+<Diagram caption="Synchronous chains block the caller end-to-end; asynchronous hand-off lets the caller acknowledge fast and decouples its uptime from the consumer's.">
+  <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="Top: a synchronous chain where a client calls order service, which calls payment, which calls a bank API, with dashed replies returning; latency adds and availability multiplies. Bottom: an asynchronous flow where the client publishes to a queue, gets a fast ack, and an email service consumes later.">
+    <defs>
+      <marker id="sva-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-accent" />
+      </marker>
+      <marker id="sva-arrow-m" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-muted" />
+      </marker>
+    </defs>
+    <text x="20" y="28" class="svg-label small muted">synchronous — caller blocked for the whole chain</text>
+    <rect x="20" y="48" width="90" height="50" rx="8" class="f-inset s-border" />
+    <text x="65" y="78" text-anchor="middle" class="svg-label">client</text>
+    <rect x="170" y="48" width="110" height="50" rx="8" class="f-inset s-border" />
+    <text x="225" y="78" text-anchor="middle" class="svg-label">order svc</text>
+    <rect x="340" y="48" width="110" height="50" rx="8" class="f-inset s-border" />
+    <text x="395" y="78" text-anchor="middle" class="svg-label">payment</text>
+    <rect x="510" y="48" width="110" height="50" rx="8" class="f-inset s-border" />
+    <text x="565" y="78" text-anchor="middle" class="svg-label">bank API</text>
+    <line x1="110" y1="63" x2="164" y2="63" class="s-accent" marker-end="url(#sva-arrow)" />
+    <line x1="280" y1="63" x2="334" y2="63" class="s-accent" marker-end="url(#sva-arrow)" />
+    <line x1="450" y1="63" x2="504" y2="63" class="s-accent" marker-end="url(#sva-arrow)" />
+    <line x1="170" y1="85" x2="116" y2="85" class="s-muted" stroke-dasharray="4 4" marker-end="url(#sva-arrow-m)" />
+    <line x1="340" y1="85" x2="286" y2="85" class="s-muted" stroke-dasharray="4 4" marker-end="url(#sva-arrow-m)" />
+    <line x1="510" y1="85" x2="456" y2="85" class="s-muted" stroke-dasharray="4 4" marker-end="url(#sva-arrow-m)" />
+    <text x="320" y="125" text-anchor="middle" class="svg-label small muted">latency adds serially - availability multiplies</text>
+    <text x="20" y="170" class="svg-label small muted">asynchronous — caller returns after enqueue</text>
+    <rect x="20" y="190" width="90" height="50" rx="8" class="f-inset s-border" />
+    <text x="65" y="220" text-anchor="middle" class="svg-label">client</text>
+    <rect x="180" y="190" width="130" height="50" rx="8" class="f-inset s-accent" />
+    <text x="245" y="220" text-anchor="middle" class="svg-label">queue</text>
+    <rect x="380" y="190" width="110" height="50" rx="8" class="f-inset s-border" />
+    <text x="435" y="220" text-anchor="middle" class="svg-label">email svc</text>
+    <line x1="110" y1="203" x2="174" y2="203" class="s-accent" marker-end="url(#sva-arrow)" />
+    <text x="145" y="196" text-anchor="middle" class="svg-label small muted">publish</text>
+    <line x1="180" y1="227" x2="116" y2="227" class="s-muted" stroke-dasharray="4 4" marker-end="url(#sva-arrow-m)" />
+    <text x="145" y="248" text-anchor="middle" class="svg-label small muted">ack (fast)</text>
+    <line x1="310" y1="215" x2="374" y2="215" class="s-accent" marker-end="url(#sva-arrow)" />
+    <text x="345" y="206" text-anchor="middle" class="svg-label small muted">deliver</text>
+    <text x="320" y="282" text-anchor="middle" class="svg-label small muted">producer stays up even while the consumer is down</text>
+  </svg>
+</Diagram>
+
+## What asynchronous really costs
+
+Async breaks the availability chain: the producer only needs the broker up, not the consumer, and a well-run Kafka or SQS deployment is more available than most application services. The queue also absorbs spikes — a flash sale that would have melted a synchronous email service just becomes a deeper backlog that drains over minutes.
+
+The bill arrives as correctness and observability work — the async counterpart of the survival kit. Brokers deliver **at least once** and order messages only per key, if at all (the mechanics — acks, redelivery, partitions — belong to the Message Queues topic). The consequences land on you: every consumer must be **idempotent** — processing a message twice must equal processing it once, typically via a deduplication key — and must either tolerate reordering or key by the entity that needs order (all events for order 4412 on one key). And because one user action now spans several processes and several seconds, stamp a **correlation ID** at the edge and carry it in every message, or the flow is unreconstructable from logs.
+
+Finally, the UX problem: the caller got a 202, so where is the result? You need a status endpoint to poll, a webhook when the job finishes, or a server push channel (the Long Polling vs WebSockets topic covers that side).
+
+## Side by side
+
+| Dimension | Synchronous | Asynchronous |
+|---|---|---|
+| Result | Immediate, in the response | Eventual; needs status/callback plumbing |
+| Availability | Multiplies across the chain | Decoupled; producer needs only the broker |
+| Load spikes | Cascade as thread exhaustion | Absorbed as queue depth |
+| Consistency | Read-your-write within the call | Eventual; visible lag |
+| Delivery | Ambiguous on timeout; retries add duplicates | At-least-once; duplicates expected |
+| Debugging | One stack trace, one status code | Correlation IDs + tracing across processes |
+| Failure mode | Timeouts, cascading outages | Silent backlog growth, poison messages |
+
+## Sagas: multi-step work without distributed transactions
+
+Checkout touches the order service, the payment service, and inventory — three databases, and no transaction coordinator spanning them (two-phase commit across microservices is a liveness trap nobody accepts). A **saga** replaces the distributed transaction with a sequence of local transactions, each publishing the message that triggers the next, and handles failure with **compensating actions** that run in reverse.
+
+Worked example: the order service creates the order in state `PENDING` and issues a *charge card* command. Payment charges $61.20 and emits `PaymentCompleted`. Inventory tries to reserve the items — and fails, the last unit sold seconds ago. Compensation now unwinds the completed steps: payment issues a refund, the order service marks the order `FAILED` and tells the user. Note what compensation is *not*: a rollback. The charge happened; the refund is a new forward action, and the customer may see both on their statement. Intermediate states are visible to the world — exactly why the saga starts at `PENDING`, not `CONFIRMED`. Sagas come as *choreography* (each service reacts to the previous one's events) or *orchestration* (a coordinator issues commands and tracks state); orchestration scales better past three or four steps because the workflow lives in one place.
+
+<Diagram caption="A checkout saga: local transactions chained by commands, with compensating actions unwinding completed steps when reservation fails.">
+  <svg viewBox="0 0 640 220" width="100%" role="img" aria-label="Saga flow: order service charges card via payment service, which reserves stock via inventory service. Reservation fails, so dashed compensation arrows run backwards: refund the charge, then mark the order failed.">
+    <defs>
+      <marker id="sva-fwd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-accent" />
+      </marker>
+      <marker id="sva-comp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="f-danger" />
+      </marker>
+    </defs>
+    <rect x="30" y="50" width="140" height="54" rx="8" class="f-inset s-border" />
+    <text x="100" y="72" text-anchor="middle" class="svg-label">order svc</text>
+    <text x="100" y="92" text-anchor="middle" class="svg-label small muted">state: PENDING</text>
+    <rect x="250" y="50" width="140" height="54" rx="8" class="f-inset s-border" />
+    <text x="320" y="72" text-anchor="middle" class="svg-label">payment svc</text>
+    <text x="320" y="92" text-anchor="middle" class="svg-label small muted">card charged</text>
+    <rect x="470" y="50" width="140" height="54" rx="8" class="f-inset s-danger" />
+    <text x="540" y="72" text-anchor="middle" class="svg-label">inventory svc</text>
+    <text x="540" y="92" text-anchor="middle" class="svg-label small muted">reserve fails</text>
+    <line x1="170" y1="70" x2="244" y2="70" class="s-accent" marker-end="url(#sva-fwd)" />
+    <text x="207" y="62" text-anchor="middle" class="svg-label small muted">1 charge</text>
+    <line x1="390" y1="70" x2="464" y2="70" class="s-accent" marker-end="url(#sva-fwd)" />
+    <text x="427" y="62" text-anchor="middle" class="svg-label small muted">2 reserve</text>
+    <path d="M 540 104 L 540 145 L 326 145 L 326 110" fill="none" class="s-danger" stroke-dasharray="5 5" marker-end="url(#sva-comp)" />
+    <text x="433" y="139" text-anchor="middle" class="svg-label small muted">3 refund charge</text>
+    <path d="M 286 104 L 286 185 L 100 185 L 100 110" fill="none" class="s-danger" stroke-dasharray="5 5" marker-end="url(#sva-comp)" />
+    <text x="193" y="179" text-anchor="middle" class="svg-label small muted">4 mark order FAILED</text>
+  </svg>
+</Diagram>
+
+## Pitfalls
+
+- **The distributed monolith.** Services wired together with synchronous calls keep a monolith's coupling and add the network's failure modes — microservice costs, monolith behavior.
+- **Sync hiding inside async.** A queue consumer that makes blocking calls to three services has quietly re-imported availability chaining; it just fails slower and further from the user.
+- **Treating the queue as infinite.** Backlogs hide overload instead of surfacing it. Monitor consumer lag: a queue that drains slower than it fills is an outage with a delay timer.
+- **Forgetting duplicates.** An email sent twice is embarrassing; a payment command processed twice is an incident. At-least-once is the contract — idempotency is not optional.
+- **Async by ideology.** Making an interaction eventual when the user needs the answer to proceed just moves complexity into polling loops and confused UX.
+
+## Choosing, per interaction
+
+The decision rule is one question asked per interaction, never per system: **does the caller need the result to take its next step?** Placing an order needs a yes/no on payment before showing the confirmation page — synchronous, with timeouts, retries, and breakers. Sending the receipt email, updating the search index, notifying the warehouse, recording analytics — none of these block the user; make them async and let a queue absorb the burst. When the caller does need a result but the work is slow — video transcoding, report generation — use request/async-reply with a job ID. Most healthy architectures end up synchronous at the edge, asynchronous behind it, one deliberate choice at a time.
