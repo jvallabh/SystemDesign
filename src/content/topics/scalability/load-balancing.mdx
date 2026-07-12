@@ -6,11 +6,17 @@ summary: "Distributing requests across servers: race round robin against least-c
 order: 1
 sim: LoadBalancingSim
 resources: [load-balancing-video]
+related:
+  - scalability/scaling
+  - scalability/availability
+  - scalability/stateful-vs-stateless
+  - distributed-systems/consistent-hashing
+  - scalability/proxy-vs-reverse-proxy
 ---
 import Diagram from '../../../components/Diagram.astro';
 import LoadBalancingSim from '../../../components/sims/LoadBalancingSim';
 
-A single server has a hard ceiling — some number of requests per second beyond which latency explodes — and a guaranteed end: hardware fails, deploys go bad, kernels panic. A load balancer sits in front of a fleet of interchangeable servers, spreads requests across them, and stops sending traffic to any server that dies. It turns "a server" into "a service": capacity becomes a dial you turn by adding machines, and individual failures become invisible to clients. (When to grow the fleet is the Scaling topic's job.)
+A single server has a hard ceiling — some number of requests per second beyond which latency explodes — and a guaranteed end: hardware fails, deploys go bad, kernels panic. A load balancer sits in front of a fleet of interchangeable servers, spreads requests across them, and stops sending traffic to any server that dies. It turns "a server" into "a service": capacity becomes a dial you turn by adding machines, and individual failures become invisible to clients. (When to grow the fleet is the [Scaling](/SystemDesign/topics/scalability/scaling/) topic's job.)
 
 <Diagram caption="The balancer probes each server and routes traffic only to the healthy ones; clients never see server B fail.">
   <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="Clients send requests to a load balancer, which forwards them to servers A and C but not to failed server B">
@@ -92,7 +98,7 @@ Every algorithm answers one question — which backend gets the next request —
 
 **Power of two choices** is the trick worth memorizing. Plain random assignment balances poorly — spread n requests over n servers and the busiest ends up around log n / log log n above the average. Sample just *two* at random and take the less loaded, and the expected imbalance collapses to roughly log log n — near-perfect balance for one extra lookup. It also fixes a subtle failure of global least-connections: balancer instances sharing stale load data all pick the same "least loaded" server simultaneously and stampede it; two random choices decorrelate them. Hence Envoy's least-request policy samples two hosts by default, and nginx offers it as `random two least_conn`.
 
-Hash-based affinity (IP hash, or a consistent hash over a request key) trades balance for locality — the same client or key always lands on the same server, which matters when that server holds a warm cache. The ring mechanics live in the Consistent Hashing topic.
+Hash-based affinity (IP hash, or a consistent hash over a request key) trades balance for locality — the same client or key always lands on the same server, which matters when that server holds a warm cache. The ring mechanics live in the [Consistent Hashing](/SystemDesign/topics/distributed-systems/consistent-hashing/) topic.
 
 The simulation below runs these policies live. Try: give the servers different speeds and race round robin against least-connections — watch round robin build a queue on the slow server while least-connections routes around it. Then click a server to kill it and watch traffic reroute as health checks pull it from rotation. Bring it back and watch the recovery surge.
 
@@ -106,7 +112,7 @@ Removing a server gracefully is the other half. **Connection draining** (AWS: de
 
 ## Sticky sessions: the trade-off
 
-If a server keeps session state in memory — a shopping cart, a login token cache — requests from that user must keep landing on that server. L7 balancers pin the user to a backend with a cookie; L4 balancers approximate it with IP hashing. This **session affinity** quietly forfeits much of what the balancer bought you: load skews (one NAT gateway fronting a large office looks like a single enormous client under IP hash), a crash loses every pinned session, draining slows to a crawl, and autoscaling half-works. The full cost accounting — and the escape, moving state off the instance so any server can handle any request — is the Stateful vs Stateless Architecture topic's story. Keep affinity only as a performance optimization (warm caches), never a correctness requirement — then losing a server costs cache misses, not user data.
+If a server keeps session state in memory — a shopping cart, a login token cache — requests from that user must keep landing on that server. L7 balancers pin the user to a backend with a cookie; L4 balancers approximate it with IP hashing. This **session affinity** quietly forfeits much of what the balancer bought you: load skews (one NAT gateway fronting a large office looks like a single enormous client under IP hash), a crash loses every pinned session, draining slows to a crawl, and autoscaling half-works. The full cost accounting — and the escape, moving state off the instance so any server can handle any request — is the [Stateful vs Stateless Architecture](/SystemDesign/topics/scalability/stateful-vs-stateless/) topic's story. Keep affinity only as a performance optimization (warm caches), never a correctness requirement — then losing a server costs cache misses, not user data.
 
 ## Global vs local balancing
 
@@ -117,7 +123,7 @@ Everything above balances within one site; getting users to the *right site* is 
 - **Retry storms.** When backends slow down, clients and balancers retry — multiplying load precisely when capacity is scarcest, turning a slowdown into an outage. Cap retries with a budget (say, at most 10 percent extra load) and use jittered exponential backoff.
 - **Thundering herd on recovery.** A server that just passed its health check gets a full traffic share instantly — with cold caches and connection pools, it may fall over again and flap. Slow-start ramps (HAProxy `slowstart`, Envoy `slow_start`) feed a recovering server a growing fraction of traffic over a warmup window.
 - **Heterogeneous request costs.** If request costs span orders of magnitude, even least-connections struggles — split traffic classes onto separate pools, and watch per-server queue depth, not just request rate.
-- **The balancer as single point of failure.** You have not removed the SPOF, you have moved it. Balancers run in redundant pairs (VRRP floating IPs) or behind anycast themselves; the redundancy arithmetic belongs to the Availability topic.
+- **The balancer as single point of failure.** You have not removed the SPOF, you have moved it. Balancers run in redundant pairs (VRRP floating IPs) or behind anycast themselves; the redundancy arithmetic belongs to the [Availability](/SystemDesign/topics/scalability/availability/) topic.
 - **Health check lies.** A `/healthz` that only returns 200 says the process is up, not that it can reach its database. Shallow checks keep broken servers in rotation; overly deep checks let one dependency outage mark the whole fleet down at once.
 
 ## When to reach for it

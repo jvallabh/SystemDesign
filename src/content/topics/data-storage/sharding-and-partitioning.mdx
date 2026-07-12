@@ -6,12 +6,18 @@ summary: "Splitting data across machines: range vs hash partitioning, hot shards
 order: 2
 sim: ShardingSim
 resources: [sharding-course, sharding-partitioning-video]
+related:
+  - distributed-systems/consistent-hashing
+  - data-storage/databases
+  - data-storage/sql-vs-nosql
+  - scalability/scaling
+  - distributed-systems/cap-theorem
 ---
 
 import Diagram from '../../../components/Diagram.astro';
 import ShardingSim from '../../../components/sims/ShardingSim';
 
-A single database node has two hard ceilings: how much data fits on its disks, and how many writes per second its one primary can absorb. Read replicas and caching relieve read pressure, but neither adds a byte of write capacity or storage. When a table heads past a few terabytes, or sustained writes climb into the tens of thousands per second, the only move left is to split the data itself across machines. That split is partitioning, and every hard problem in it flows from one decision: *which rows live where*.
+A single database node has two hard ceilings: how much data fits on its disks, and how many writes per second its one primary can absorb. Read replicas and [caching](/SystemDesign/topics/caching/caching-strategies/) relieve read pressure, but neither adds a byte of write capacity or storage. When a table heads past a few terabytes, or sustained writes climb into the tens of thousands per second, the only move left is to split the data itself across machines. That split is partitioning, and every hard problem in it flows from one decision: *which rows live where*.
 
 ## Two axes of splitting
 
@@ -79,7 +85,7 @@ The range failure mode is the one people walk into: timestamp keys written a mil
   </svg>
 </Diagram>
 
-The simulation below lets you feel both failure modes. Feed **sequential keys into range sharding** and watch the last shard saturate while the others idle; flip to **hash sharding** with the same stream and watch it flatten; then **trigger a reshard** under each scheme and compare how many keys move — naive hashing reshuffles nearly everything, the problem Consistent Hashing exists to fix.
+The simulation below lets you feel both failure modes. Feed **sequential keys into range sharding** and watch the last shard saturate while the others idle; flip to **hash sharding** with the same stream and watch it flatten; then **trigger a reshard** under each scheme and compare how many keys move — naive hashing reshuffles nearly everything, the problem [Consistent Hashing](/SystemDesign/topics/distributed-systems/consistent-hashing/) exists to fix.
 
 <ShardingSim client:visible />
 
@@ -109,7 +115,7 @@ Everything a single-node database does across rows gets expensive when the rows 
 
 **Scatter-gather queries.** Any query that omits the shard key must be sent to all N shards and merged. Latency becomes the *slowest* shard's response — with 100 shards, the chance every shard beats its own p99 is 0.99^100, about 37%, so nearly two-thirds of scatter queries eat at least one shard's worst-1% latency. Throughput suffers too: one logical query consumes N shards' worth of work.
 
-**Distributed transactions.** A transaction spanning shards needs two-phase commit — extra round trips and locks held across them (the ACID page covers 2PC and why it blocks). Most sharded systems forbid cross-shard transactions or make them slow enough that schemas contort to keep each transaction on one shard — e.g., colocating a user's orders with the user.
+**Distributed transactions.** A transaction spanning shards needs two-phase commit — extra round trips and locks held across them (the [ACID page](/SystemDesign/topics/data-storage/acid-transactions/) covers 2PC and why it blocks). Most sharded systems forbid cross-shard transactions or make them slow enough that schemas contort to keep each transaction on one shard — e.g., colocating a user's orders with the user.
 
 **Secondary indexes.** A *local* index lives on each shard and only covers that shard's rows, so querying by a non-key column is a scatter-gather. A *global* index is itself sharded by the indexed column — reads become targeted, but now every write updates two shards, which is why DynamoDB's global secondary indexes are updated asynchronously and read slightly stale.
 
@@ -119,7 +125,7 @@ Load grows; shard counts must change. Two strategies keep that survivable:
 
 **Pre-split into many logical shards.** Create far more logical shards than physical machines on day one — thousands, not tens — and map many-to-one onto hardware. Growing capacity then means *moving whole logical shards*, never re-partitioning data. Instagram ran thousands of logical shards as Postgres schemas across a few dozen machines, and embedded a 13-bit shard ID inside every 64-bit post ID so any ID is self-routing forever. Vitess reshards by splitting a shard's keyspace range in two, copying rows and tailing the replication log until the new shards catch up, then cutting over in seconds. DynamoDB does the same invisibly, splitting any partition that passes roughly 10 GB or its throughput cap.
 
-**Consistent hashing** attacks the other half of the problem — making `hash(key) mod N` stop reshuffling nearly every key when N changes — and has its own page; the short version is that adding one node should move about 1/N of the keys, not all of them.
+**[Consistent hashing](/SystemDesign/topics/distributed-systems/consistent-hashing/)** attacks the other half of the problem — making `hash(key) mod N` stop reshuffling nearly every key when N changes — and has its own page; the short version is that adding one node should move about 1/N of the keys, not all of them.
 
 ## The routing tier
 

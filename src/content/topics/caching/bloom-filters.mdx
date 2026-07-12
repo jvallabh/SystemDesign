@@ -6,12 +6,17 @@ summary: "A tiny probabilistic set that answers \"definitely not present\" in a 
 order: 2
 sim: BloomFiltersSim
 resources: [bloom-filters-video]
+related:
+  - caching/caching-strategies
+  - caching/cdn
+  - data-storage/databases
+  - data-storage/sql-vs-nosql
 ---
 
 import Diagram from '../../../components/Diagram.astro';
 import BloomFiltersSim from '../../../components/sims/BloomFiltersSim';
 
-Most lookups in a big system are for keys that do not exist: a cache miss, a crawler re-checking a URL, a storage engine probing a file on disk. Paying a disk seek or a network hop just to learn "not here" is the most expensive way to learn nothing. A bloom filter is a set membership test that fits in a few bits per element and answers in constant time — with one asymmetry that makes the whole design work: **"no" is always correct, "yes" is only probably correct.**
+Most lookups in a big system are for keys that do not exist: a [cache miss](/SystemDesign/topics/caching/caching-strategies/), a crawler re-checking a URL, a storage engine probing a file on disk. Paying a disk seek or a network hop just to learn "not here" is the most expensive way to learn nothing. A bloom filter is a set membership test that fits in a few bits per element and answers in constant time — with one asymmetry that makes the whole design work: **"no" is always correct, "yes" is only probably correct.**
 
 ## How it works
 
@@ -175,7 +180,7 @@ A web crawler must not re-fetch pages it has already visited. At a billion URLs,
 
 ### CDN admission: filtering one-hit wonders
 
-Akamai found that roughly three-quarters of objects requested at its edge are requested exactly once — "one-hit wonders". Caching them evicts genuinely popular content for zero benefit. The fix: only admit an object into the cache on its *second* request, using a bloom filter to remember "have I seen this URL before". This cut disk writes dramatically and raised hit rates — a nice example where the filter gates writes rather than reads.
+Akamai found that roughly three-quarters of objects requested at its [edge](/SystemDesign/topics/caching/cdn/) are requested exactly once — "one-hit wonders". Caching them evicts genuinely popular content for zero benefit. The fix: only admit an object into the cache on its *second* request, using a bloom filter to remember "have I seen this URL before". This cut disk writes dramatically and raised hit rates — a nice example where the filter gates writes rather than reads.
 
 ## Trade-offs and pitfalls
 

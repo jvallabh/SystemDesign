@@ -5,6 +5,7 @@ tier: written
 summary: "Inverting the API: how services notify you when something happens instead of making you poll."
 order: 5
 resources: [webhooks-video]
+related: [architecture-patterns/message-queues, distributed-systems/idempotency, architecture-patterns/sync-vs-async, communication-apis/long-polling-vs-websockets, communication-apis/apis]
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -55,11 +56,11 @@ A production webhook delivery is never "event happens, fire an HTTP request inli
   </svg>
 </Diagram>
 
-The steps, end to end: an event occurs and is written durably (often alongside the business transaction, via an outbox). A fan-out step finds every endpoint subscribed to that event type — one `order.paid` may become five deliveries. Each delivery is enqueued independently. A worker POSTs the event with an HMAC signature over the body, and waits a bounded time for a response — GitHub gives you 10 seconds before declaring the delivery dead. A 2xx marks it delivered; anything else, or a timeout, schedules a retry with exponential backoff. Stripe keeps retrying for up to three days, stretching intervals from minutes to hours; after the final failure the delivery is dead-lettered, the endpoint may be auto-disabled, and the consumer gets an email instead of a POST. (Queueing mechanics in general are the Message Queues page's territory.)
+The steps, end to end: an event occurs and is written durably (often alongside the business transaction, via an outbox). A fan-out step finds every endpoint subscribed to that event type — one `order.paid` may become five deliveries. Each delivery is enqueued independently. A worker POSTs the event with an HMAC signature over the body, and waits a bounded time for a response — GitHub gives you 10 seconds before declaring the delivery dead. A 2xx marks it delivered; anything else, or a timeout, schedules a retry with exponential backoff. Stripe keeps retrying for up to three days, stretching intervals from minutes to hours; after the final failure the delivery is dead-lettered, the endpoint may be auto-disabled, and the consumer gets an email instead of a POST. (Queueing mechanics in general are the [Message Queues](/SystemDesign/topics/architecture-patterns/message-queues/) page's territory.)
 
 ## What the provider does and does not promise
 
-Retries create the defining contract of webhooks: **at-least-once delivery**. If the consumer processed the event but the 2xx got lost in a timeout, the provider retries and the consumer sees the event twice. Exactly-once is not on offer — so every consumer must be idempotent (the Idempotency page covers the techniques; here, deduping by event id is usually enough).
+Retries create the defining contract of webhooks: **at-least-once delivery**. If the consumer processed the event but the 2xx got lost in a timeout, the provider retries and the consumer sees the event twice. Exactly-once is not on offer — so every consumer must be idempotent (the [Idempotency](/SystemDesign/topics/distributed-systems/idempotency/) page covers the techniques; here, deduping by event id is usually enough).
 
 Ordering is the second non-promise. Retries and parallel workers mean `invoice.paid` can arrive before the `invoice.created` it logically follows. Stripe says so explicitly. Consumers must key off the event's content and current state, never off arrival order.
 
@@ -96,7 +97,7 @@ Fetch-on-receipt costs one extra API call per event, but it makes staleness impo
 
 **Return 2xx fast.** The provider's timeout is your budget — respond in well under 10 seconds, ideally tens of milliseconds. Any real work done inline risks a timeout, which triggers a retry, which duplicates work you already did.
 
-**Process asynchronously.** The handler should do exactly three things: verify, persist or enqueue, respond. Everything else happens in a worker after the ack. This is the Sync vs Async pattern applied at your front door.
+**Process asynchronously.** The handler should do exactly three things: verify, persist or enqueue, respond. Everything else happens in a worker after the ack. This is the [Sync vs Async](/SystemDesign/topics/architecture-patterns/sync-vs-async/) pattern applied at your front door.
 
 **Dedupe by event id.** Store processed event ids (a unique-constraint insert is the simplest form) and skip repeats. This single table converts at-least-once delivery into effectively-once processing.
 

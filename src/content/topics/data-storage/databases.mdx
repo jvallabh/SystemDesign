@@ -5,6 +5,12 @@ tier: written
 summary: "A workload-organized map of the database landscape and how to pick a store for each component of a system."
 order: 3
 resources: [databases-video]
+related:
+  - data-storage/sql-vs-nosql
+  - data-storage/sharding-and-partitioning
+  - data-storage/acid-transactions
+  - data-storage/cdc
+  - caching/caching-strategies
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -13,7 +19,7 @@ Every system design eventually asks the same question: where does this data live
 
 ## A taxonomy by workload
 
-Databases are best organized not by vendor or by "SQL vs NoSQL" (that decision has its own page) but by the workload each category dominates:
+Databases are best organized not by vendor or by ["SQL vs NoSQL"](/SystemDesign/topics/data-storage/sql-vs-nosql/) (that decision has its own page) but by the workload each category dominates:
 
 | Category | Canonical example | Wins when the workload is |
 |---|---|---|
@@ -33,7 +39,7 @@ Two observations make the table useful. First, the rows overlap: Postgres has JS
 
 Most decisions in the table trace back to one internal split: how the storage engine puts bytes on disk.
 
-**B-trees** (Postgres, MySQL/InnoDB) keep data in fixed-size pages ordered in a shallow tree. A read walks root to leaf — three or four page accesses, mostly cached — so point reads and range scans are fast and predictable. A write must find the right page and rewrite it in place, which means random I/O and write amplification: touching one 100-byte row rewrites an 8KB page.
+**B-trees** (Postgres, MySQL/InnoDB) keep data in fixed-size pages ordered in a shallow tree. A read walks root to leaf — three or four page accesses, mostly cached — so point reads and range scans are fast and predictable. A write must find the right page and rewrite it in place, which means random I/O and write amplification: touching one 100-byte row rewrites an 8KB (Postgres) or 16KB (InnoDB) page.
 
 **LSM-trees** (Cassandra, RocksDB, and the engine under most wide-column and many key-value stores) never modify data in place. Writes append to an in-memory memtable, which flushes to immutable sorted files (SSTables); background compaction merges the files. Writes become sequential I/O — which is why a single Cassandra node sustains write rates that would bury a B-tree — but a read may have to check the memtable plus several SSTables, paying read amplification, and compaction periodically eats disk bandwidth.
 
@@ -116,10 +122,10 @@ The design consequence: any read served from a replica can miss a write the same
 
 ## Worked example: an e-commerce system
 
-- **Orders, payments, inventory, users → Postgres.** Money and stock counts need transactional correctness (the ACID page covers why), and the volumes — thousands of orders per minute even at serious scale — are trivial for one primary plus replicas.
+- **Orders, payments, inventory, users → Postgres.** Money and stock counts need transactional correctness (the [ACID page](/SystemDesign/topics/data-storage/acid-transactions/) covers why), and the volumes — thousands of orders per minute even at serious scale — are trivial for one primary plus replicas.
 - **Cart and sessions → Redis.** Ephemeral, keyed by user, hit on every page view; sub-millisecond reads and native TTL expiry fit exactly.
-- **Catalog search → Elasticsearch.** "wireles headphones" must match wireless headphones, ranked and faceted. Fed from Postgres — CDC is the standard way to keep it in sync.
-- **Product images → S3** behind a CDN.
+- **Catalog search → Elasticsearch.** "wireles headphones" must match wireless headphones, ranked and faceted. Fed from Postgres — [CDC](/SystemDesign/topics/data-storage/cdc/) is the standard way to keep it in sync.
+- **Product images → S3** behind a [CDN](/SystemDesign/topics/caching/cdn/).
 - **Clickstream analytics → ClickHouse or Snowflake.** "Conversion rate by category last quarter" scans billions of events; running it on the OLTP box would starve checkout.
 
 Note the shape: one system of record (Postgres) plus derived, disposable specialists. Search and analytics can be rebuilt from the source of truth; that asymmetry keeps the polyglot manageable.
@@ -133,4 +139,4 @@ Note the shape: one system of record (Postgres) plus derived, disposable special
 
 ## When to reach for what
 
-Default to Postgres until it hurts. One boring relational primary handles transactions, documents (JSONB), moderate search, and low tens of thousands of transactions per second on a single well-provisioned machine — which is more than most systems ever see. Add Redis early if you have hot-path key lookups; add a search engine when users need relevance ranking; add a warehouse when analysts start slowing down production. Reach for wide-column or DynamoDB-style stores only when a single workload's write volume or scale-out needs demonstrably exceed a relational primary — at which point Sharding and SQL vs NoSQL are the pages to read next.
+Default to Postgres until it hurts. One boring relational primary handles transactions, documents (JSONB), moderate search, and low tens of thousands of transactions per second on a single well-provisioned machine — which is more than most systems ever see. Add Redis early if you have hot-path key lookups; add a search engine when users need relevance ranking; add a warehouse when analysts start slowing down production. Reach for wide-column or DynamoDB-style stores only when a single workload's write volume or scale-out needs demonstrably exceed a relational primary — at which point [Sharding](/SystemDesign/topics/data-storage/sharding-and-partitioning/) and [SQL vs NoSQL](/SystemDesign/topics/data-storage/sql-vs-nosql/) are the pages to read next.

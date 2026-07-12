@@ -5,6 +5,11 @@ tier: written
 summary: "Same idea, opposite direction: who is hidden — the client or the server — and why it matters."
 order: 5
 resources: [proxy-video]
+related:
+  - scalability/load-balancing
+  - communication-apis/api-gateways
+  - caching/cdn
+  - scalability/rate-limiting
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -79,7 +84,7 @@ Concrete flow. A user hits `https://api.example.com/orders`. DNS resolves to the
 Why the server side bothers:
 
 - **TLS termination.** Handshakes and record encryption cost CPU; centralizing them means app servers speak plain HTTP internally and certificates rotate in one place instead of fifty.
-- **Load balancing.** One public IP fans out across N backends — the defining job of a load balancer, which is really a reverse proxy specialized for traffic distribution (the Load Balancing topic covers the algorithms).
+- **Load balancing.** One public IP fans out across N backends — the defining job of a load balancer, which is really a reverse proxy specialized for traffic distribution (the [Load Balancing](/SystemDesign/topics/scalability/load-balancing/) topic covers the algorithms).
 - **Caching and compression.** Serve a hot response from proxy memory in well under a millisecond instead of a 50ms backend render; gzip or brotli on the way out.
 - **Security and hiding topology.** A WAF filters injection attempts before they reach app code. Backends keep private IPs attackers can't count, fingerprint, or hit directly — and you can upgrade or drain them invisibly.
 - **Connection management.** Ten thousand slow mobile clients holding keep-alive connections collapse into a few dozen warm, multiplexed connections per backend.
@@ -120,8 +125,8 @@ Most infrastructure you've heard of is a reverse proxy wearing a specialty hat:
 
 - **nginx** — a `proxy_pass` block makes it a reverse proxy, its overwhelmingly common deployment. (The one caveat to "same binary": nginx has no native `CONNECT` support, so it can't forward-proxy HTTPS without third-party patches — that's Squid's territory.) HAProxy, Envoy, and Caddy live in the same space.
 - **Load balancers** are reverse proxies whose defining feature is distribution across a backend pool (at L4 they balance connections without even parsing HTTP).
-- **CDNs** — Cloudflare, Fastly, CloudFront — are reverse proxies replicated at hundreds of edge locations worldwide, so the "front door" is 20ms from the user instead of 200ms. The CDN topic covers what happens at that edge.
-- **API gateways** — Kong, AWS API Gateway — are reverse proxies specialized for APIs: authentication, rate limiting, per-route policies. The API Gateway topic goes deep there.
+- **CDNs** — Cloudflare, Fastly, CloudFront — are reverse proxies replicated at hundreds of edge locations worldwide, so the "front door" is 20ms from the user instead of 200ms. The [CDN](/SystemDesign/topics/caching/cdn/) topic covers what happens at that edge.
+- **API gateways** — Kong, AWS API Gateway — are reverse proxies specialized for APIs: authentication, [rate limiting](/SystemDesign/topics/scalability/rate-limiting/), per-route policies. The [API Gateway](/SystemDesign/topics/communication-apis/api-gateways/) topic goes deep there.
 
 ## Trade-offs and pitfalls
 

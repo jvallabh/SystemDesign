@@ -37,13 +37,16 @@ npm run preview    # serve the build locally
 
 ### Adding a topic
 
-1. Create `src/content/topics/<category>/<slug>.mdx` with frontmatter (`title`, `category`, `tier`, `summary`, `order`, optional `sim` and `resources`).
+1. Create `src/content/topics/<category>/<slug>.mdx` with frontmatter (`title`, `category`, `tier`, `summary`, `order`, optional `sim`, `resources`, and `related` — ids like `caching/cdn`, rendered as "Related concepts" chips).
 2. Resource links live in `src/data/resources.json`; the build fails on unknown keys. Resolve new lnkd.in links with `node scripts/resolve-links.mjs <code>`.
 3. Simulations follow the pattern in `src/components/sims/SmokeTestSim.tsx`: pure step function + `useRef` world + `useRafLoop` + `SimFrame` chrome. Embed with `<MySim client:visible />`.
 
-Internal links and assets must go through `withBase()` (`src/utils/url.ts`) — the site serves from the `/SystemDesign` base path.
+Internal links and assets must go through `withBase()` (`src/utils/url.ts`) — the site serves from the `/SystemDesign` base path. In MDX prose, cross-topic links are written as `[text](/SystemDesign/topics/<category>/<slug>/)`.
 
 ## Project docs
 
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — design decisions and the options considered
 - [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) — phased build plan and current status
+- [`docs/EXPLAINER.md`](docs/EXPLAINER.md) — how the site was built (multi-agent content pipeline)
+- [`docs/ADR.md`](docs/ADR.md) — architecture & process decision records
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — what's shipped and what's next

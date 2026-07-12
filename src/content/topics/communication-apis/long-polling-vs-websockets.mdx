@@ -6,6 +6,7 @@ summary: "From short polling to SSE and WebSockets — compare the latency, over
 order: 2
 sim: PollingWebSocketsSim
 resources: [polling-websockets-video]
+related: [communication-apis/webhooks, scalability/stateful-vs-stateless, communication-apis/rest-grpc-graphql-trpc, scalability/load-balancing, architecture-patterns/message-queues]
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -15,13 +16,13 @@ HTTP's contract is strictly client-initiated: the client asks, the server answer
 
 ## Short polling: ask on a timer
 
-The client requests the latest state every `n` seconds — `GET /messages?since=cursor` on a loop. The server answers immediately, usually with nothing new. It is the simplest possible scheme: stateless, cacheable, debuggable with `curl`, and it works through every proxy and firewall because it is ordinary HTTP.
+The client requests the latest state every `n` seconds — `GET /messages?since=cursor` on a loop. The server answers immediately, usually with nothing new. It is the simplest possible scheme: [stateless](/SystemDesign/topics/scalability/stateful-vs-stateless/), cacheable, debuggable with `curl`, and it works through every proxy and firewall because it is ordinary HTTP.
 
 The cost is a latency/overhead dial with no good setting. Worst-case delivery latency **equals the poll interval** — an event landing just after a poll waits a full interval; on average it waits half of one. Tighten the interval and the overhead arithmetic turns ugly: a request line plus headers (cookies, user agent, accept headers) commonly runs 500–800 bytes, and the response headers add another 200–300 — call it roughly 700–1,000 bytes of pure envelope per cycle, before any payload. A client polling every 2 seconds makes about 43,000 requests a day even if nothing ever happens. A million such clients present 500,000 requests per second to your fleet, almost all of them returning an empty body. You are paying full request-processing cost — TLS record, routing, auth check, handler dispatch — to learn "nothing yet" tens of billions of times a day.
 
 ## Long polling: hold the question open
 
-Long polling keeps the same request/response shape but moves the waiting to the server. The client asks; if there is nothing to say, the server *parks the request* instead of answering — typically for 25–30 seconds, just under the idle timeouts of intermediate proxies and load balancers. The moment data arrives, the server responds to the parked request and the client immediately re-asks. On timeout, the server sends an empty response and the client re-asks anyway.
+Long polling keeps the same request/response shape but moves the waiting to the server. The client asks; if there is nothing to say, the server *parks the request* instead of answering — typically for 25–30 seconds, just under the idle timeouts of intermediate proxies and [load balancers](/SystemDesign/topics/scalability/load-balancing/). The moment data arrives, the server responds to the parked request and the client immediately re-asks. On timeout, the server sends an empty response and the client re-asks anyway.
 
 While a request is parked, delivery latency collapses to near zero — the answer leaves the instant the event occurs. Reconnection is built into the loop itself, which is part of the appeal: there is no separate "connection" to manage, just the next request. But there is a blind window between receiving a response and issuing the next request. The server must buffer events during that gap and the client must pass a cursor (last-seen event ID) so nothing is dropped.
 
@@ -123,7 +124,7 @@ The trade-offs are easiest to feel live. In the simulator below, drop the event 
 A polling fleet is operationally boring in the best way: every request is self-contained, so any server can answer it and the load balancer can spray traffic freely. A WebSocket fleet gives that up. Each connection is pinned to the specific node that accepted it, which changes four things:
 
 - **Load balancing.** The LB must tolerate connections that live for hours, and "balanced" now means balanced *connection counts*, not request counts. Draining a node for deploy means disconnecting everyone on it, not just waiting for in-flight requests.
-- **Fan-out.** To deliver an event to user X you must find the node holding X's socket. That means either a routing registry or a broadcast layer where every node subscribes to a pub/sub channel and forwards to its local sockets.
+- **Fan-out.** To deliver an event to user X you must find the node holding X's socket. That means either a routing registry or a broadcast layer where every node subscribes to a [pub/sub channel](/SystemDesign/topics/architecture-patterns/message-queues/) and forwards to its local sockets.
 - **Reconnect storms.** When a node holding 100,000 connections dies, 100,000 clients attempt TLS handshakes and auth simultaneously — a self-inflicted DDoS. Jittered exponential backoff on the client is not optional; it is the only thing spreading that spike.
 - **State on failover.** Everything the socket implied — subscriptions, presence, delivery cursors — evaporates with the node and must be re-established on resume, which is why the sequence-number protocol matters as much as the transport.
 

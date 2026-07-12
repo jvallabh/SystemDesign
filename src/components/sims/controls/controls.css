@@ -61,6 +61,11 @@
   border-left: 1px solid var(--border);
 }
 
+/* .sim-segments clips overflow, so pull the focus ring inside the button */
+.sim-segments button:focus-visible {
+  outline-offset: -2px;
+}
+
 .sim-segments button.active {
   background: var(--accent-dim);
   color: var(--accent);

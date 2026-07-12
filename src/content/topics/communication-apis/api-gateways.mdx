@@ -5,6 +5,7 @@ tier: written
 summary: "The single front door for your services: routing, auth, rate limiting, and protocol translation in one layer."
 order: 6
 resources: [api-gateways-video]
+related: [architecture-patterns/services, communication-apis/jwts, scalability/rate-limiting, scalability/proxy-vs-reverse-proxy, communication-apis/rest-grpc-graphql-trpc]
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -16,11 +17,11 @@ Split a backend into twenty services and you inherit a question the monolith nev
 A gateway is a reverse proxy that has been taught about APIs. On every request it can perform some mix of:
 
 - **Routing** — map `/orders/*` to the orders service and `/users/*` to the users service, by path, host, or header.
-- **Authentication and authorization** — verify the JWT or API key once at the edge, reject bad credentials before they consume backend capacity, and pass a trusted identity header downstream so services never re-parse tokens (token mechanics live in the JWTs topic).
-- **Rate limiting and quotas** — per API key or per user, enforced before the request touches a database (algorithms are the Rate Limiting topic's job).
+- **Authentication and authorization** — verify the JWT or API key once at the edge, reject bad credentials before they consume backend capacity, and pass a trusted identity header downstream so services never re-parse tokens (token mechanics live in the [JWTs](/SystemDesign/topics/communication-apis/jwts/) topic).
+- **Rate limiting and quotas** — per API key or per user, enforced before the request touches a database (algorithms are the [Rate Limiting](/SystemDesign/topics/scalability/rate-limiting/) topic's job).
 - **TLS termination** — certificates live in one place; internal traffic can run plaintext or mesh-managed mTLS.
 - **Request/response transformation** — rewrite paths, inject headers, strip internal fields from responses, version-shim old clients.
-- **Protocol translation** — accept HTTP/JSON from browsers, speak gRPC to internal services; or bridge WebSocket connections to backend pub/sub.
+- **Protocol translation** — accept HTTP/JSON from browsers, speak gRPC to internal services; or bridge [WebSocket](/SystemDesign/topics/communication-apis/long-polling-vs-websockets/) connections to backend pub/sub.
 - **Response aggregation** — fan out one client call to several services and merge the results.
 - **Observability** — one choke point that logs, meters, and traces 100% of external traffic with consistent request IDs.
 
@@ -81,7 +82,7 @@ These four get conflated because they all sit between callers and servers. They 
 | API gateway | north-south | one policy-enforcing front door across *many* services | API-level semantics: routes, auth, per-consumer limits |
 | Service mesh | east-west | secure and observe service-to-service calls via sidecars | manages traffic *between* services, not from the outside world |
 
-In practice they compose: an L4 load balancer spreads traffic across gateway replicas, the gateway routes to a service, and an internal balancer or mesh sidecar picks the replica. Proxy fundamentals belong to the Proxy vs Reverse Proxy topic, and balancing algorithms to Load Balancing.
+In practice they compose: an L4 load balancer spreads traffic across gateway replicas, the gateway routes to a service, and an internal balancer or mesh sidecar picks the replica. Proxy fundamentals belong to the [Proxy vs Reverse Proxy](/SystemDesign/topics/scalability/proxy-vs-reverse-proxy/) topic, and balancing algorithms to [Load Balancing](/SystemDesign/topics/scalability/load-balancing/).
 
 ## Backends for frontends
 

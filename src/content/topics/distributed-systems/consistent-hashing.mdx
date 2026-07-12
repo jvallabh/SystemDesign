@@ -6,6 +6,12 @@ summary: "The hash ring that lets you add or remove nodes while remapping only a
 order: 2
 sim: ConsistentHashingSim
 resources: [consistent-hashing-video]
+related:
+  - data-storage/sharding-and-partitioning
+  - scalability/load-balancing
+  - caching/caching-strategies
+  - distributed-systems/cap-theorem
+  - distributed-systems/distributed-algorithms
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -121,7 +127,7 @@ The idea comes from Karger et al.'s 1997 paper, written for web caching at what 
 
 - **Amazon Dynamo** (2007) built its whole partitioning story on a vnode ring with preference-list replication; **Cassandra**, **ScyllaDB**, and **Riak** inherited the token-ring design.
 - **Memcached clients** — memcached servers know nothing about each other, so the *client library* runs the ring. The ketama algorithm (last.fm, 2007) is the classic implementation and still ships in most memcached and Redis client libraries.
-- **Cache-affinity load balancing** — Envoy and nginx offer ring-hash upstream selection so requests for the same key keep landing on the same backend, preserving its local cache. The broader routing-algorithm menu belongs to the Load Balancing topic.
+- **Cache-affinity load balancing** — Envoy and nginx offer ring-hash upstream selection so requests for the same key keep landing on the same backend, preserving its local cache. The broader routing-algorithm menu belongs to the [Load Balancing topic](/SystemDesign/topics/scalability/load-balancing/).
 
 ## Refinements: bounded loads and rendezvous
 
@@ -147,4 +153,4 @@ Plain consistent hashing balances *key counts*, not *load* — one celebrity key
 
 ## When to reach for it
 
-Use consistent hashing whenever node membership changes while the system is live and remapping keys has a real cost — cache misses, data movement, lost session affinity. That covers distributed caches, partitioned stateful stores, and sticky request routing; whether to hash-partition at all (versus range partitioning) is the Sharding and Partitioning topic's question. Default to a vnode ring; add bounded loads when hot keys skew traffic. If your node set is small and changes are rare, rendezvous hashing is simpler with the same guarantees. And if N is genuinely fixed, changed only in planned maintenance with a full rebuild, plain mod-N is honestly fine. The moment "add a node" becomes a routine operation instead of an event, it isn't.
+Use consistent hashing whenever node membership changes while the system is live and remapping keys has a real cost — cache misses, data movement, lost session affinity. That covers [distributed caches](/SystemDesign/topics/caching/caching-strategies/), partitioned stateful stores, and sticky request routing; whether to hash-partition at all (versus range partitioning) is the [Sharding and Partitioning topic's](/SystemDesign/topics/data-storage/sharding-and-partitioning/) question. Default to a vnode ring; add bounded loads when hot keys skew traffic. If your node set is small and changes are rare, rendezvous hashing is simpler with the same guarantees. And if N is genuinely fixed, changed only in planned maintenance with a full rebuild, plain mod-N is honestly fine. The moment "add a node" becomes a routine operation instead of an event, it isn't.

@@ -5,6 +5,11 @@ tier: written
 summary: "The coordination toolbox — logical clocks, failure detectors, consensus, quorums, gossip, and fencing tokens — and where real systems use each one."
 order: 3
 resources: [distributed-algorithms-playlist]
+related:
+  - distributed-systems/cap-theorem
+  - distributed-systems/consistent-hashing
+  - scalability/availability
+  - architecture-patterns/message-queues
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -60,7 +65,7 @@ One honest caveat: the FLP result proves that in a fully asynchronous system, no
 
 ## Quorums: the overlap argument
 
-Strip consensus down and one idea remains: overlapping sets. Write to W replicas out of N, read from R, and if `W + R > N` every read set intersects every write set — some node in your read saw the latest write. Cassandra exposes this directly as tunable consistency (`QUORUM` writes plus `QUORUM` reads at N=3 means W=2, R=2). Quorums alone are weaker than consensus — no leader serializes concurrent writes — which is the trade-off space the CAP theorem topic covers.
+Strip consensus down and one idea remains: overlapping sets. Write to W replicas out of N, read from R, and if `W + R > N` every read set intersects every write set — some node in your read saw the latest write. Cassandra exposes this directly as tunable consistency (`QUORUM` writes plus `QUORUM` reads at N=3 means W=2, R=2). Quorums alone are weaker than consensus — no leader serializes concurrent writes — which is the trade-off space the [CAP theorem topic](/SystemDesign/topics/distributed-systems/cap-theorem/) covers.
 
 <Diagram caption="With N=5, W=3, R=3, any write quorum and any read quorum share at least one replica, so reads always touch a node holding the latest write.">
   <svg viewBox="0 0 640 250" width="100%" role="img" aria-label="Five replica boxes N1 through N5. A write quorum bracket covers N1 to N3 and a read quorum bracket covers N3 to N5; N3 is highlighted as the guaranteed overlap.">
@@ -97,7 +102,7 @@ The fix is a **fencing token**: a monotonically increasing number issued with ea
 | Primitive | Buys you | Runs in |
 | --- | --- | --- |
 | Lamport / vector clocks | Ordering and conflict detection without wall clocks | Raft terms, Kafka epochs, Dynamo-style stores |
-| Heartbeats / phi-accrual | Bounded-delay suspicion of dead nodes | Cassandra, Akka, every load balancer health check |
+| Heartbeats / phi-accrual | Bounded-delay suspicion of dead nodes | Cassandra, Akka, every [load balancer](/SystemDesign/topics/scalability/load-balancing/) health check |
 | Consensus (Raft, Paxos, ZAB) | One agreed value or log despite failures | etcd, ZooKeeper, Consul, Kafka KRaft |
 | Quorums | Read-your-write overlap without a leader | Cassandra, Riak, Dynamo lineage |
 | Gossip + anti-entropy | Membership and repair at O(log N) rounds | Cassandra, Consul/Serf, Dynamo |

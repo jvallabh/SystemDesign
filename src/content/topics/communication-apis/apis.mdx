@@ -5,6 +5,7 @@ tier: written
 summary: "What an API actually is: the contract that lets two pieces of software talk without knowing each other's internals."
 order: 3
 resources: [apis-video]
+related: [communication-apis/rest, communication-apis/rest-grpc-graphql-trpc, distributed-systems/idempotency, scalability/rate-limiting, communication-apis/webhooks]
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -47,14 +48,14 @@ The idea predates networks. A function signature is an API: callers depend on th
 
 A usable contract specifies far more than endpoints. Each piece removes a class of guesswork:
 
-- **Operations** — what you can do, and which calls are safe to retry. Read operations should be side-effect free; retryable writes need idempotency keys (the Idempotency page covers the mechanics).
+- **Operations** — what you can do, and which calls are safe to retry. Read operations should be side-effect free; retryable writes need idempotency keys (the [Idempotency](/SystemDesign/topics/distributed-systems/idempotency/) page covers the mechanics).
 - **Schemas** — exact field names, types, nullability, and units. "amount" is ambiguous; "amount in minor currency units, integer" is a contract.
 - **Errors** — every failure mode a client must handle, with machine-readable codes.
 - **Pagination** — how large collections are traversed, guaranteed on every list endpoint.
-- **Rate limits** — the request budget, plus how the API says "slow down" (429 with a `Retry-After` header) so clients can back off instead of hammering.
+- **[Rate limits](/SystemDesign/topics/scalability/rate-limiting/)** — the request budget, plus how the API says "slow down" (429 with a `Retry-After` header) so clients can back off instead of hammering.
 - **Compatibility rules** — which changes the provider may make without notice, and which require a new version.
 
-The transport style — REST conventions, gRPC, GraphQL — is a separate decision covered by the REST page and the API-styles comparison; every one of them still needs all six items above.
+The transport style — REST conventions, gRPC, GraphQL — is a separate decision covered by the [REST](/SystemDesign/topics/communication-apis/rest/) page and the [API-styles comparison](/SystemDesign/topics/communication-apis/rest-grpc-graphql-trpc/); every one of them still needs all six items above.
 
 ## Error design
 
@@ -127,7 +128,7 @@ Offset also rots at scale: `OFFSET 100000` forces the database to read and disca
 
 ## Versioning and why breaking changes cost so much
 
-Hyrum's law: with enough users, every observable behavior of your API will be depended on by somebody — the field order, the exact error message, the undocumented timeout. So a "breaking change" is anything a client can observe, not just what you documented, and shipping one means coordinating a migration across code you do not control and cannot even see. For a public API that can take years: Stripe still serves API versions from the early 2010s.
+Hyrum's law: with enough users, every observable behavior of your API will be depended on by somebody — the field order, the exact error message, the undocumented timeout. So a "breaking change" is anything a client can observe, not just what you documented, and shipping one means coordinating a migration across code you do not control and cannot even see. For a public API that can take years: Stripe has kept decade-old pinned API versions working for clients that never upgraded.
 
 | Strategy | How | Trade-off |
 |---|---|---|

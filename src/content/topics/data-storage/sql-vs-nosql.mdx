@@ -6,6 +6,11 @@ summary: "Relational vs key-value, document, wide-column, and graph stores — m
 order: 1
 sim: SqlNosqlSim
 resources: [sql-nosql-video]
+related:
+  - data-storage/databases
+  - data-storage/sharding-and-partitioning
+  - data-storage/acid-transactions
+  - distributed-systems/cap-theorem
 ---
 import Diagram from '../../../components/Diagram.astro';
 import SqlNosqlSim from '../../../components/sims/SqlNosqlSim';
@@ -17,7 +22,7 @@ import SqlNosqlSim from '../../../components/sims/SqlNosqlSim';
 A relational database is not "the old default" — it is a remarkably aggressive set of guarantees:
 
 - **Joins.** Data lives normalized — each fact stored once — and the engine reassembles any combination at read time. You do not have to know today which questions you will ask next year.
-- **Multi-row ACID transactions.** Debit one row, credit another, and either both happen or neither does — even across tables. The ACID topic covers the machinery; the point here is that no application-level workaround fully replaces it.
+- **Multi-row ACID transactions.** Debit one row, credit another, and either both happen or neither does — even across tables. The [ACID topic](/SystemDesign/topics/data-storage/acid-transactions/) covers the machinery; the point here is that no application-level workaround fully replaces it.
 - **Ad-hoc queries.** A declarative planner turns "revenue by region, last quarter, excluding refunds" into an execution plan with an index strategy you never wrote. New question, zero new code.
 - **Schema enforcement.** The database rejects a row with a missing column or a dangling foreign key at write time. Your data cannot silently rot.
 - **Four decades of tooling.** Backups, replication, migrations, ORMs, analysts who speak SQL. PostgreSQL and MySQL problems are almost never novel problems.
@@ -26,7 +31,7 @@ A single beefy PostgreSQL instance comfortably serves tens of thousands of trans
 
 ## Why NoSQL emerged
 
-Around 2004–2010, Google, Amazon, and Facebook hit workloads where the relational bet broke: datasets too large for one machine and write rates too high for one primary. Once data must spread across many nodes, the expensive features are precisely the cross-row ones — a join across partitions means network hops, and a transaction across partitions means distributed coordination (the trade-offs live in the CAP Theorem and Sharding topics).
+Around 2004–2010, Google, Amazon, and Facebook hit workloads where the relational bet broke: datasets too large for one machine and write rates too high for one primary. Once data must spread across many nodes, the expensive features are precisely the cross-row ones — a join across partitions means network hops, and a transaction across partitions means distributed coordination (the trade-offs live in the [CAP Theorem](/SystemDesign/topics/distributed-systems/cap-theorem/) and [Sharding](/SystemDesign/topics/data-storage/sharding-and-partitioning/) topics).
 
 The NoSQL generation — Google's Bigtable and Amazon's Dynamo papers, then Cassandra, MongoDB, Redis and the rest — inverted the design. Instead of "model the data, then ask anything," they said: **declare your access patterns first, lay the data out so each pattern is one cheap partition-local operation, and drop the features that fight horizontal scale** — joins, multi-row transactions, and enforced schema. That is not one database category; it is four, each solving a different problem.
 
@@ -104,6 +109,6 @@ The dichotomy is eroding from both ends. Google's Spanner and CockroachDB shard 
 
 Default to relational until a specific access pattern breaks it — you will know, because the fix stops being "add an index" and becomes "shard" or "cache everything." Reach for key-value when the query is always by key and latency must stay flat at any scale; document when objects are self-contained aggregates read whole; wide-column when sustained write throughput dominates and queries follow one partition key; graph when the queries are traversals more than lookups.
 
-Real systems pick several — polyglot persistence: orders in PostgreSQL for invariants, sessions in Redis for speed, the catalog in MongoDB, clickstream events in Cassandra. Mapping every component of a system to the store its workload deserves is the Databases in System Design page's territory.
+Real systems pick several — polyglot persistence: orders in PostgreSQL for invariants, sessions in Redis for speed, the catalog in MongoDB, clickstream events ingested into Cassandra (and later analyzed in a warehouse). Mapping every component of a system to the store its workload deserves is the [Databases in System Design](/SystemDesign/topics/data-storage/databases/) page's territory.
 
 Every added store is another system to operate, back up, and keep consistent with the others — so add the second one when a measured pattern demands it, not on day one. The question was never SQL *or* NoSQL. It is: what shape is this data, how will you read it, and which engine made that exact bet?

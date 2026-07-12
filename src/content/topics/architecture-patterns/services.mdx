@@ -5,6 +5,12 @@ tier: written
 summary: "Drawing service boundaries — monolith, modular monolith, microservices — and why data ownership, not technology, decides where the lines go."
 order: 2
 resources: [services-video]
+related:
+  - architecture-patterns/sync-vs-async
+  - data-storage/acid-transactions
+  - data-storage/sharding-and-partitioning
+  - communication-apis/api-gateways
+  - architecture-patterns/message-queues
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -15,11 +21,11 @@ Pick the wrong database and you can migrate off it in a quarter. Draw the wrong 
 
 There are not two options but a spectrum, and the middle point is the most underrated.
 
-A **monolith** is one deployable: one build, one release, one process (scaled horizontally as identical copies). Function calls between modules cost nanoseconds and cannot fail independently. One database means real ACID transactions across the whole domain — see ACID Transactions for the mechanics. Refactoring across module lines is an IDE operation, not a cross-team negotiation. The pain arrives with scale of *people*, not traffic: fifty engineers in one codebase contend for the release train, a memory leak anywhere restarts everything, and the hottest 5 percent of the code forces you to scale the other 95 percent with it.
+A **monolith** is one deployable: one build, one release, one process (scaled horizontally as identical copies). Function calls between modules cost nanoseconds and cannot fail independently. One database means real ACID transactions across the whole domain — see [ACID Transactions](/SystemDesign/topics/data-storage/acid-transactions/) for the mechanics. Refactoring across module lines is an IDE operation, not a cross-team negotiation. The pain arrives with scale of *people*, not traffic: fifty engineers in one codebase contend for the release train, a memory leak anywhere restarts everything, and the hottest 5 percent of the code forces you to scale the other 95 percent with it.
 
 A **modular monolith** keeps the single deployable but enforces internal boundaries: modules expose narrow interfaces, tooling fails the build when module A reaches into module B's internals, and each module keeps its tables private by convention. Shopify runs one of the largest Rails codebases in existence this way — millions of lines, over a thousand engineers, flash-sale traffic — as a "componentized" monolith rather than a service mesh.
 
-**Microservices** make each boundary a process boundary: independent deploys, independent scaling, independent failure. The price is that every in-process call becomes a network hop (0.5–10 ms plus serialization, versus nanoseconds), every cross-service write becomes a distributed-consistency problem, every interface becomes a versioned contract you can never change unilaterally, and every service adds an on-call surface: discovery, tracing, dashboards, deploy pipeline.
+**Microservices** make each boundary a process boundary: independent deploys, independent scaling, independent failure. The price is that every in-process call becomes a network hop (0.5–10 ms plus serialization for the raw same-datacenter transit alone, before the callee does any work, versus nanoseconds), every cross-service write becomes a distributed-consistency problem, every interface becomes a versioned contract you can never change unilaterally, and every service adds an on-call surface: discovery, tracing, dashboards, deploy pipeline.
 
 | | Monolith | Modular monolith | Microservices |
 |---|---|---|---|
@@ -96,7 +102,7 @@ The practical heuristics for where to cut, in rough priority order:
 
 ## Data ownership is the real boundary
 
-The rule: **each service owns its database, and no other service touches it**. Other services get the data through the owner's API or its published events (Sync vs Async covers those mechanics). The schema stays private, so the owner can refactor tables, add indexes, or shard (see Sharding and Partitioning) without asking anyone.
+The rule: **each service owns its database, and no other service touches it**. Other services get the data through the owner's API or its published events ([Sync vs Async](/SystemDesign/topics/architecture-patterns/sync-vs-async/) covers those mechanics). The schema stays private, so the owner can refactor tables, add indexes, or shard (see [Sharding and Partitioning](/SystemDesign/topics/data-storage/sharding-and-partitioning/)) without asking anyone.
 
 The corresponding anti-pattern is **integration through a shared database**: several "services" reading and writing the same tables. The schema becomes a frozen public contract — every migration needs sign-off from every reader, every hot query from one service degrades the others, and you have all the operational cost of separate deployables with none of the autonomy. Split processes that share a database are not services; they are a monolith with extra steps.
 
@@ -150,7 +156,7 @@ The corresponding anti-pattern is **integration through a shared database**: sev
 
 ## The distributed monolith
 
-The worst outcome on the spectrum is not the monolith — it is the **distributed monolith**: many deployables that must still be released together because their boundaries were drawn wrong. Symptoms: a feature routinely touches four repos; services share a database or fine-grained synchronous call chains; a deploy order document exists; one service's outage cascades through the fleet. You pay microservice costs — network latency on every call, contract versioning, an API Gateway and tracing stack, per-service on-call — while keeping monolith coupling. Every property in the comparison table lands in the worse column.
+The worst outcome on the spectrum is not the monolith — it is the **distributed monolith**: many deployables that must still be released together because their boundaries were drawn wrong. Symptoms: a feature routinely touches four repos; services share a database or fine-grained synchronous call chains; a deploy order document exists; one service's outage cascades through the fleet. You pay microservice costs — network latency on every call, contract versioning, an [API Gateway](/SystemDesign/topics/communication-apis/api-gateways/) and tracing stack, per-service on-call — while keeping monolith coupling. Every property in the comparison table lands in the worse column.
 
 Segment lived this publicly. Their per-destination workers multiplied into 140-plus services and repos, shared libraries drifted out of sync across all of them, and autoscaling 140 load profiles consumed the team. In 2018 they collapsed the fleet back into a monolith and wrote up the retreat ("Goodbye Microservices"). The lesson is not "microservices bad" — it is that boundaries drawn along the wrong axis multiply, not divide, your operational load.
 

@@ -6,6 +6,11 @@ summary: "Partition a live 3-node cluster and watch why you must choose between 
 order: 1
 sim: CapTheoremSim
 resources: [cap-theorem-video]
+related:
+  - distributed-systems/distributed-algorithms
+  - data-storage/acid-transactions
+  - scalability/availability
+  - data-storage/sql-vs-nosql
 ---
 import Diagram from '../../../components/Diagram.astro';
 import CapTheoremSim from '../../../components/sims/CapTheoremSim';
@@ -23,7 +28,7 @@ When a network partition separates the nodes of a distributed data store, the sy
 
 Two more corrections worth internalizing:
 
-- **CAP's C is not ACID's C.** ACID consistency means a transaction preserves invariants inside one database — foreign keys hold, balances stay non-negative (the ACID topic owns that). CAP's C is about replicas agreeing on the order and recency of reads and writes.
+- **CAP's C is not ACID's C.** ACID consistency means a transaction preserves invariants inside one database — foreign keys hold, balances stay non-negative (the [ACID topic](/SystemDesign/topics/data-storage/acid-transactions/) owns that). CAP's C is about replicas agreeing on the order and recency of reads and writes.
 - **Calling a single-node Postgres "CA" is a category error.** With one node there is no network to partition, so CAP does not apply at all. The theorem activates the instant you add a replica.
 
 ## One partition, two responses
@@ -114,7 +119,7 @@ Real systems rarely sit at a pure pole; they expose a dial. With N replicas, req
 | 3 | 3 | 1 | Reads are cheap and always current, but one dead node blocks every write. |
 | 3 | 1 | 1 | Fast and available through any partition; no overlap, so reads can be stale. Eventual consistency. |
 
-Cassandra exposes this per query (`ONE`, `QUORUM`, `ALL`), so a single table can serve CP-style reads for account balances and AP-style reads for view counts. Caveat: overlapping quorums alone do not give full linearizability — the machinery that does (read repair, consensus rounds) belongs to the Distributed Algorithms topic.
+Cassandra exposes this per query (`ONE`, `QUORUM`, `ALL`), so a single table can serve CP-style reads for account balances and AP-style reads for view counts. Caveat: overlapping quorums alone do not give full linearizability — the machinery that does (read repair, consensus rounds) belongs to the [Distributed Algorithms topic](/SystemDesign/topics/distributed-systems/distributed-algorithms/).
 
 ## When replicas disagree
 

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import './simframe.css';
 
 /**
@@ -23,6 +23,19 @@ export function SimFrame({
   readouts?: { label: string; value: string | number }[];
   children: ReactNode;
 }) {
+  // Respect prefers-reduced-motion: sims autoplay by default, so pause once
+  // after hydration for users who opt out of motion (they can still press
+  // play). Runs post-mount only — server and client initial markup stay
+  // identical. The ref guards against re-runs (prop changes, StrictMode).
+  const checkedReducedMotion = useRef(false);
+  useEffect(() => {
+    if (checkedReducedMotion.current) return;
+    checkedReducedMotion.current = true;
+    if (playing && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      onPlayPause();
+    }
+  }, [playing, onPlayPause]);
+
   return (
     <section className="sim-frame" aria-label={`${title} simulation`}>
       <header className="sim-header">

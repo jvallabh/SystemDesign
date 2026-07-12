@@ -6,6 +6,7 @@ summary: "Four API styles answer the same question differently — compare contr
 order: 1
 sim: ApiStylesSim
 resources: [api-styles-video]
+related: [communication-apis/rest, communication-apis/apis, communication-apis/long-polling-vs-websockets, communication-apis/api-gateways]
 ---
 import Diagram from '../../../components/Diagram.astro';
 import ApiStylesSim from '../../../components/sims/ApiStylesSim';
@@ -14,7 +15,7 @@ Every API answers the same question — how does a client ask a server to do som
 
 ## REST: resources over a uniform interface
 
-REST's core bet is that a small, fixed vocabulary beats a custom one. Everything is a resource with a URL (`/users/42`), and every interaction uses the same handful of HTTP verbs with standard semantics: GET is safe and cacheable, PUT is idempotent, status codes mean the same thing everywhere. Because the interface is uniform, generic infrastructure understands your API without knowing anything about it — browsers, CDNs, proxies, and load balancers can cache GETs, retry idempotent calls, and route by path. That is why nearly every successful public API (Stripe, Twilio, GitHub's v3) is REST-shaped: any client on earth can call it with an HTTP library and nothing else. The cost is that the server decides response shapes, and there is usually no machine-checked contract unless you maintain an OpenAPI spec by hand. The dedicated REST page covers the constraints in depth.
+REST's core bet is that a small, fixed vocabulary beats a custom one. Everything is a resource with a URL (`/users/42`), and every interaction uses the same handful of HTTP verbs with standard semantics: GET is safe and cacheable, PUT is idempotent, status codes mean the same thing everywhere. Because the interface is uniform, generic infrastructure understands your API without knowing anything about it — browsers, CDNs, proxies, and load balancers can cache GETs, retry idempotent calls, and route by path. That is why nearly every successful public API (Stripe, Twilio, GitHub's v3) is REST-shaped: any client on earth can call it with an HTTP library and nothing else. The cost is that the server decides response shapes, and there is usually no machine-checked contract unless you maintain an OpenAPI spec by hand. The dedicated [REST](/SystemDesign/topics/communication-apis/rest/) page covers the constraints in depth.
 
 ## gRPC: a compiled contract over HTTP/2
 
@@ -32,18 +33,25 @@ REST's fixed response shapes create two chronic problems for client teams. Over-
       </marker>
     </defs>
     <text x="20" y="26" text-anchor="start" class="svg-label">REST</text>
-    <rect x="20" y="70" width="110" height="44" rx="8" class="f-raised s-border" />
-    <text x="75" y="97" text-anchor="middle" class="svg-label">client</text>
+    <rect x="20" y="40" width="110" height="40" rx="8" class="f-raised s-border" />
+    <text x="75" y="65" text-anchor="middle" class="svg-label">client</text>
+    <line x1="75" y1="80" x2="75" y2="164" class="s-border" stroke-dasharray="4 4" />
     <rect x="450" y="40" width="170" height="36" rx="8" class="f-inset s-border" />
     <text x="535" y="63" text-anchor="middle" class="svg-label small">/users/42</text>
     <rect x="450" y="86" width="170" height="36" rx="8" class="f-inset s-border" />
     <text x="535" y="109" text-anchor="middle" class="svg-label small">/users/42/orders</text>
     <rect x="450" y="132" width="170" height="36" rx="8" class="f-inset s-border" />
     <text x="535" y="155" text-anchor="middle" class="svg-label small">/orders/9/items</text>
-    <line x1="130" y1="80" x2="450" y2="58" class="s-muted" marker-end="url(#api-arrow)" />
-    <line x1="130" y1="92" x2="450" y2="104" class="s-muted" marker-end="url(#api-arrow)" />
-    <line x1="130" y1="104" x2="450" y2="150" class="s-muted" marker-end="url(#api-arrow)" />
-    <text x="290" y="46" text-anchor="middle" class="svg-label small muted">3 sequential round trips</text>
+    <text x="142" y="48" class="svg-label small muted">1</text>
+    <line x1="134" y1="48" x2="446" y2="52" class="s-muted" marker-end="url(#api-arrow)" />
+    <line x1="450" y1="62" x2="138" y2="76" class="s-muted" marker-end="url(#api-arrow)" />
+    <text x="88" y="90" class="svg-label small muted">2</text>
+    <line x1="80" y1="90" x2="446" y2="96" class="s-muted" marker-end="url(#api-arrow)" />
+    <line x1="450" y1="108" x2="84" y2="120" class="s-muted" marker-end="url(#api-arrow)" />
+    <text x="88" y="136" class="svg-label small muted">3</text>
+    <line x1="80" y1="136" x2="446" y2="142" class="s-muted" marker-end="url(#api-arrow)" />
+    <line x1="450" y1="154" x2="84" y2="164" class="s-muted" marker-end="url(#api-arrow)" />
+    <text x="290" y="34" text-anchor="middle" class="svg-label small muted">3 sequential round trips</text>
     <text x="290" y="180" text-anchor="middle" class="svg-label small muted">whole resources, ~40 KB</text>
     <text x="20" y="226" text-anchor="start" class="svg-label">GraphQL</text>
     <rect x="20" y="248" width="110" height="44" rx="8" class="f-raised s-border" />
@@ -135,7 +143,7 @@ Each style evolves differently, and this matters more than launch-day ergonomics
 - **Unbounded query cost.** A public GraphQL endpoint accepting arbitrary nesting is a denial-of-service invitation. Defenses: depth limits, complexity scoring (GitHub budgets clients at 5,000 points per hour), and persisted queries that whitelist known shapes.
 - **GraphQL forfeits HTTP caching.** Everything is a POST to one URL, so CDNs and browser caches see nothing cacheable; you rebuild caching in the client (normalized stores like Apollo's) or via persisted GET queries.
 - **gRPC and the browser.** Plan the gRPC-Web proxy from day one if any browser will ever call the service — or accept running a REST/GraphQL edge in front of gRPC internals, which is what most large shops do.
-- **REST over-fetching compounds.** Each "just add the field to the response" request grows payloads for every client forever; per-client shaping is exactly the pressure that leads teams to GraphQL or a BFF.
+- **REST over-fetching compounds.** Each "just add the field to the response" request grows payloads for every client forever; per-client shaping is exactly the pressure that leads teams to GraphQL or a [BFF](/SystemDesign/topics/communication-apis/api-gateways/).
 - **tRPC couples deploys.** Monorepo-or-bust: split the repo or add a non-TypeScript consumer and the compile-time contract evaporates.
 
 ## Which one, when
@@ -145,4 +153,4 @@ Each style evolves differently, and this matters more than launch-day ergonomics
 - **Many differing clients or a mobile BFF → GraphQL.** When iOS, Android, web, and partners each need different slices of the same graph, client-composed queries beat endpoint proliferation — if you staff the server-side cost controls.
 - **Full-stack TypeScript monorepo → tRPC.** One team, one repo, one deploy: take the end-to-end type safety for free and skip the schema entirely.
 
-These compose. A common production shape is gRPC between services, GraphQL at the mobile edge, REST for the public API — and for pushing data to clients rather than answering requests, that's the Long Polling vs WebSockets topic.
+These compose. A common production shape is gRPC between services, GraphQL at the mobile edge, REST for the public API — and for pushing data to clients rather than answering requests, that's the [Long Polling vs WebSockets](/SystemDesign/topics/communication-apis/long-polling-vs-websockets/) topic.

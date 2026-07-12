@@ -6,6 +6,12 @@ summary: "Cache-aside vs write-through vs write-back, and LRU vs LFU eviction �
 order: 1
 sim: CachingSim
 resources: [caching-course, caching-strategies-article, caching-patterns-aws]
+related:
+  - caching/cdn
+  - caching/bloom-filters
+  - distributed-systems/consistent-hashing
+  - data-storage/cdc
+  - communication-apis/api-gateways
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -136,15 +142,15 @@ The simulator below runs a live key stream against a small cache, with a scan bu
 
 ## The hard parts
 
-**Invalidation.** TTL is the bluntest tool: staleness is bounded but guaranteed, and you tune one number. Explicit invalidation (delete-on-write, as in cache-aside) is precise but demands that every write path knows every cache key derived from the data — miss one and it stays wrong until something else expires it. Change-driven invalidation subscribes to the database's own change stream; the plumbing for that is Change Data Capture's territory. Whatever you choose, keep a TTL as a backstop — it converts every bug from "stale forever" into "stale for five minutes."
+**Invalidation.** TTL is the bluntest tool: staleness is bounded but guaranteed, and you tune one number. Explicit invalidation (delete-on-write, as in cache-aside) is precise but demands that every write path knows every cache key derived from the data — miss one and it stays wrong until something else expires it. Change-driven invalidation subscribes to the database's own change stream; the plumbing for that is [Change Data Capture](/SystemDesign/topics/data-storage/cdc/)'s territory. Whatever you choose, keep a TTL as a backstop — it converts every bug from "stale forever" into "stale for five minutes."
 
 **Stampedes.** A popular key expires, and every request for the next 100 ms misses and issues the same database query — ten thousand concurrent rebuilds of one value can take the database down, which takes the cache down harder. Defenses: a per-key lock so one request rebuilds while the rest wait or serve the stale copy; request coalescing so identical in-flight loads share one fetch; and probabilistic early expiry, where each request recomputes early with a probability that rises as the deadline nears, smearing refreshes out instead of synchronizing them.
 
-**Hot keys.** Skew helps hit ratio but hurts at the extreme: one celebrity key can draw enough traffic to saturate the single cache node that owns it (which node that is belongs to Consistent Hashing). Mitigations are a tiny in-process cache in front of the shared one — even a 1-second local TTL absorbs most of the flood — or replicating the key under several suffixes and spreading reads across them.
+**Hot keys.** Skew helps hit ratio but hurts at the extreme: one celebrity key can draw enough traffic to saturate the single cache node that owns it (which node that is belongs to [Consistent Hashing](/SystemDesign/topics/distributed-systems/consistent-hashing/)). Mitigations are a tiny in-process cache in front of the shared one — even a 1-second local TTL absorbs most of the flood — or replicating the key under several suffixes and spreading reads across them.
 
 ## Layers all the way down
 
-App-level caching is one floor of a taller building. A read may be served by the browser's HTTP cache, a CDN edge node (a topic of its own), a reverse proxy or API gateway cache, the Redis tier this article describes, and finally the database's buffer pool holding hot pages in RAM. Each layer sits closer to the user and is harder to invalidate. When debugging staleness, find which layer served the stale byte before touching code — it is often not the one you own.
+App-level caching is one floor of a taller building. A read may be served by the browser's HTTP cache, a [CDN](/SystemDesign/topics/caching/cdn/) edge node (a topic of its own), a [reverse proxy](/SystemDesign/topics/scalability/proxy-vs-reverse-proxy/) or [API gateway](/SystemDesign/topics/communication-apis/api-gateways/) cache, the Redis tier this article describes, and finally the database's buffer pool holding hot pages in RAM. Each layer sits closer to the user and is harder to invalidate. When debugging staleness, find which layer served the stale byte before touching code — it is often not the one you own.
 
 ## Choosing
 

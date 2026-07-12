@@ -69,3 +69,4 @@ Note: the source list's CDC, Caching, Caching Strategies, Cache Eviction Policie
 - **Hydration:** `client:visible` for all sims (they sit mid-article). Never `client:only`.
 - **Base path:** every internal link/asset goes through `withBase()` (`src/utils/url.ts`). Astro does not rewrite hand-written hrefs.
 - **Astro v5 content API:** `src/content.config.ts` + `glob` loader; render with `render(entry)` from `astro:content`; `entry.id` drives route params.
+- **Cross-linking (Phase 8):** topic pages may link to each other — inline links in MDX use the exact format `[text](/SystemDesign/topics/<category>/<slug>/)` (hardcoded base; MDX can't call `withBase()`), and `related:` frontmatter (array of `<category>/<slug>` ids) drives the "Related concepts" chips rendered by `TopicLayout`.

@@ -33,12 +33,12 @@ All six content waves are shipped; every topic page is at full depth with its fl
 
 **Open item (resolved 2026-07-10):** the source links for CDC, Caching, Caching Strategies, Cache Eviction Policies, and CDN were YouTube search queries — replaced with hand-curated resources in `resources.json` (AWS/web.dev for CDN, Confluent/Red Hat for CDC, CodeAhoy/AWS whitepaper for caching strategies).
 
-## Phase 8 — Polish pass
+## Phase 8 — Polish pass ✅ (shipped 2026-07-11)
 
-- Landing-page motion (subtle hero animation), page-transition niceties
-- Cross-topic "related concepts" links between pages
-- OpenGraph/social cards and sitemap for shareability
-- Lighthouse pass: performance, accessibility (keyboard/screen-reader support in sims), SEO
+- Landing-page motion (subtle hero animation), page-transition niceties — CSS-only, reduced-motion-safe ✅
+- Cross-topic "related concepts" links between pages — inline prose links + `related` frontmatter chips ✅
+- OpenGraph/social cards and sitemap for shareability — OG/Twitter/canonical tags, og-card.png, sitemap.xml, robots.txt ✅
+- Accessibility: sims start paused under reduced-motion, consistent `:focus-visible` styles, keyboard-accessible mobile nav ✅ (known gap: light-theme `--accent` as link text is 3.74:1, below AA — brand-color decision pending)
 
 ## Later ideas (not committed)
 

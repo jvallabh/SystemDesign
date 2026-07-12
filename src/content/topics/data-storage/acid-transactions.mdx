@@ -5,6 +5,12 @@ tier: written
 summary: "Atomicity, consistency, isolation, durability — the guarantees that let you write concurrent code without reasoning about interleavings."
 order: 4
 resources: [acid-video]
+related:
+  - data-storage/sql-vs-nosql
+  - data-storage/databases
+  - distributed-systems/cap-theorem
+  - distributed-systems/idempotency
+  - data-storage/sharding-and-partitioning
 ---
 import Diagram from '../../../components/Diagram.astro';
 
@@ -49,7 +55,7 @@ The mechanism is logging. Before touching any data page, the engine appends the 
 
 ## Consistency: the odd one out
 
-Consistency here means "application-defined invariants hold": balances never go negative, every order row has a customer. Unlike the other three letters, the database cannot supply this on its own — it knows nothing of your invariants beyond declared constraints (foreign keys, CHECK, UNIQUE). Consistency is a contract: if each transaction individually preserves the invariants, atomicity, isolation, and durability guarantee the database as a whole stays valid. Joe Hellerstein has quipped that the C was tossed in mainly to make the acronym work. (It is unrelated to CAP's consistency, which is about replica agreement.)
+Consistency here means "application-defined invariants hold": balances never go negative, every order row has a customer. Unlike the other three letters, the database cannot supply this on its own — it knows nothing of your invariants beyond declared constraints (foreign keys, CHECK, UNIQUE). Consistency is a contract: if each transaction individually preserves the invariants, atomicity, isolation, and durability guarantee the database as a whole stays valid. Joe Hellerstein has quipped that the C was tossed in mainly to make the acronym work. (It is unrelated to [CAP](/SystemDesign/topics/distributed-systems/cap-theorem/)'s consistency, which is about replica agreement.)
 
 ## Isolation: the deep one
 
@@ -114,7 +120,7 @@ Durability means a committed transaction survives power loss. Mechanically it is
 
 Inside one node, ACID is a solved problem. Across services with separate databases it gets ugly. The classic answer, **two-phase commit**, has a coordinator ask every participant to *prepare* (make the transaction durable but undecided), then tells everyone to commit. The flaw is blocking: a prepared participant must hold its locks until the coordinator delivers a verdict. If the coordinator crashes after phase one, participants sit in doubt — rows locked, potentially for minutes. That is why 2PC rarely crosses service boundaries in modern architectures.
 
-The microservices alternative is the **saga**: a chain of ordinary local transactions, each with a compensating action (refund the charge, restock the item) that runs if a later step fails. You trade isolation — intermediate states are visible — for availability, and every step must be safely retryable (the Idempotency topic covers that).
+The microservices alternative is the **saga**: a chain of ordinary local transactions, each with a compensating action (refund the charge, restock the item) that runs if a later step fails. You trade isolation — intermediate states are visible — for availability, and every step must be safely retryable (the [Idempotency](/SystemDesign/topics/distributed-systems/idempotency/) topic covers that).
 
 ## Contrast: BASE
 

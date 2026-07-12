@@ -6,6 +6,12 @@ summary: "Decouple producers from consumers: throttle consumers and watch queues
 order: 1
 sim: MessageQueuesSim
 resources: [message-queues-video]
+related:
+  - architecture-patterns/sync-vs-async
+  - distributed-systems/idempotency
+  - architecture-patterns/batch-vs-stream
+  - scalability/rate-limiting
+  - data-storage/cdc
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -107,7 +113,7 @@ Try these in the simulation below: fire a traffic spike and watch depth rise whi
 | At-least-once | Ack after processing; redeliver on timeout | Crash after processing, before ack, duplicates it | Consumers must tolerate duplicates |
 | Exactly-once | Transactions + idempotent producer (Kafka), dedup windows (SQS FIFO) | Guarantee ends at the broker's boundary | Throughput hit; false comfort if misread |
 
-The exactly-once caveat deserves emphasis: Kafka's transactions make a consume-transform-produce loop exactly-once *within Kafka*. The moment your consumer calls an external API, charges a card, or writes to a non-participating database, you are back to at-least-once, because the side effect and the ack cannot commit atomically. The production pattern is **effectively-once**: accept at-least-once delivery and make the consumer idempotent, so duplicates are harmless. How to build idempotent handlers is its own topic (Idempotency).
+The exactly-once caveat deserves emphasis: Kafka's transactions make a consume-transform-produce loop exactly-once *within Kafka*. The moment your consumer calls an external API, charges a card, or writes to a non-participating database, you are back to at-least-once, because the side effect and the ack cannot commit atomically. The production pattern is **effectively-once**: accept at-least-once delivery and make the consumer idempotent, so duplicates are harmless. How to build idempotent handlers is its own topic ([Idempotency](/SystemDesign/topics/distributed-systems/idempotency/)).
 
 ## Ordering
 
@@ -119,19 +125,19 @@ A queue does not remove overload; it *relocates* it. If producers sustain 1,000 
 
 So the two metrics that matter are **depth** (messages waiting) and **age of the oldest message** (how stale the head of the queue is). They are linked by Little's law: time-in-queue equals depth divided by drain rate. Depth alone can mislead — 50,000 queued messages is fine at 10,000/s drain (5 seconds of lag) and a disaster at 50/s (17 minutes). Age is what the user experiences.
 
-A worked spike: steady state is 200 messages/s in, consumers can do 400/s. A promotion fires traffic to 1,000/s for 60 seconds. The queue grows at 600/s, peaking at 36,000 messages. When the spike ends, consumers drain the surplus at 200/s (400 capacity minus 200 ongoing arrivals), taking 180 seconds to return to empty. Total user impact: the worst-placed message waits about 90 seconds (36,000 deep, drained at 400/s). No errors, no dropped orders, no autoscaling scramble — that is the queue doing its job. If the "spike" never ends, no buffer saves you: scale consumers, or shed load at the front door (Rate Limiting).
+A worked spike: steady state is 200 messages/s in, consumers can do 400/s. A promotion fires traffic to 1,000/s for 60 seconds. The queue grows at 600/s, peaking at 36,000 messages. When the spike ends, consumers drain the surplus at 200/s (400 capacity minus 200 ongoing arrivals), taking 180 seconds to return to empty. Total user impact: the worst-placed message waits about 90 seconds (36,000 deep, drained at 400/s). No errors, no dropped orders, no autoscaling scramble — that is the queue doing its job. If the "spike" never ends, no buffer saves you: scale consumers, or shed load at the front door ([Rate Limiting](/SystemDesign/topics/scalability/rate-limiting/)).
 
 ## The broker landscape
 
 **RabbitMQ** is the classic *smart broker*: exchanges route messages to queues by routing key, headers, or fan-out rules; the broker tracks per-message acks and deletes on ack. Rich routing, per-message TTLs, priorities — and messages are gone once consumed.
 
-**Kafka is not a queue; it is a replicated log.** Messages are appended to partitions and retained for a configured window (days, or forever) regardless of consumption. Consumers track their own position as an **offset** and can rewind it — replay yesterday's events into a rebuilt cache, or point a brand-new service at week-old history. Deleting-on-ack versus retaining-with-offsets is *the* architectural distinction: a queue distributes work; a log records what happened. That is why Kafka underpins event sourcing and CDC pipelines, and why a single partition can push hundreds of MB/s from sequential disk I/O.
+**Kafka is not a queue; it is a replicated log.** Messages are appended to partitions and retained for a configured window (days, or forever) regardless of consumption. Consumers track their own position as an **offset** and can rewind it — replay yesterday's events into a rebuilt cache, or point a brand-new service at week-old history. Deleting-on-ack versus retaining-with-offsets is *the* architectural distinction: a queue distributes work; a log records what happened. That is why Kafka underpins event sourcing and [CDC](/SystemDesign/topics/data-storage/cdc/) pipelines, and why a single partition can push hundreds of MB/s from sequential disk I/O.
 
 **SQS** is the managed-simplicity option: no brokers to run, effectively unlimited throughput on standard queues, pay per request (about $0.40 per million after the free tier). You give up routing and replay; you gain never being paged for a broker disk filling up.
 
 ## Trade-offs and pitfalls
 
-- **You traded latency and consistency for resilience.** The producer's "success" now means "enqueued", not "done". If the caller needs the answer in the response — auth checks, price quotes — a queue is the wrong tool; that boundary is covered under Sync vs Async.
+- **You traded latency and consistency for resilience.** The producer's "success" now means "enqueued", not "done". If the caller needs the answer in the response — auth checks, price quotes — a queue is the wrong tool; that boundary is covered under [Sync vs Async](/SystemDesign/topics/architecture-patterns/sync-vs-async/).
 - **Debugging gets harder.** A request that fans out through three queues has no single stack trace. Budget for correlation IDs and tracing from day one.
 - **Visibility timeout mismatch** is the most common self-inflicted duplicate source: processing takes 45s, timeout is 30s, every message is handled twice.
 - **Unbounded queues hide sustained overload** until the backlog is hours deep. Alert on oldest-message age, not just depth.

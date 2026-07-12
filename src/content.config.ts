@@ -18,6 +18,7 @@ const topics = defineCollection({
       summary: z.string(),
       order: z.number().default(99),
       resources: z.array(z.string()).default([]),
+      related: z.array(z.string()).default([]),
       sim: z.string().optional(),
       draft: z.boolean().default(false),
     })

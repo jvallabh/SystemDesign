@@ -5,6 +5,12 @@ tier: written
 summary: "Why stateless services scale trivially and where the state you can't eliminate should live."
 order: 6
 resources: [stateful-stateless-video]
+related:
+  - scalability/scaling
+  - scalability/load-balancing
+  - communication-apis/jwts
+  - communication-apis/long-polling-vs-websockets
+  - communication-apis/rest
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -21,7 +27,7 @@ This is a narrower claim than it sounds. A stateless service still reads and wri
 
 Three pieces of scaling machinery all depend on the same property — any instance can serve any request:
 
-- **Load balancing.** The load balancer can use plain round-robin or least-connections with no pinning logic. Load spreads evenly because nothing ties a client to a machine.
+- **Load balancing.** The [load balancer](/SystemDesign/topics/scalability/load-balancing/) can use plain round-robin or least-connections with no pinning logic. Load spreads evenly because nothing ties a client to a machine.
 - **Autoscaling.** A new instance is fully useful the moment its health check passes — it needs no warm-up of client data. Terminating an instance loses nothing. Scaling from 4 to 40 instances during a traffic spike, and back down overnight, is a policy setting.
 - **Deploys.** A rolling deploy is drain, kill, replace. Draining means waiting seconds for in-flight requests to finish — not hours for resident sessions to expire.
 
@@ -66,7 +72,7 @@ Session state has to live somewhere. There are exactly three homes:
 2. **A shared cache.** Keep only a random session ID in the cookie and store the session in Redis or Memcached. Any instance resolves it with a same-zone round trip of roughly 0.5ms.
 3. **The database.** Anything that must survive a cache flush — carts worth money, user preferences, drafts — belongs in durable storage, not a session at all.
 
-The token-vs-store choice comes up constantly. A JWT trades a store lookup for a signature check and pushes state to the client, which is attractive when many services must verify identity without sharing a database — and painful the moment you need instant logout or per-user bans. A server-side session store costs one sub-millisecond Redis read per request and makes revocation a single DELETE. Most systems that already run Redis pick the store; token mechanics are covered in depth in the JWTs topic.
+The token-vs-store choice comes up constantly. A JWT trades a store lookup for a signature check and pushes state to the client, which is attractive when many services must verify identity without sharing a database — and painful the moment you need instant logout or per-user bans. A server-side session store costs one sub-millisecond Redis read per request and makes revocation a single DELETE. Most systems that already run Redis pick the store; token mechanics are covered in depth in the [JWTs](/SystemDesign/topics/communication-apis/jwts/) topic.
 
 ## Sticky sessions: the halfway hack
 
@@ -115,7 +121,7 @@ Sticky sessions are a defensible bridge while migrating a legacy app that assume
 
 Some systems cannot externalize their state, and pretending otherwise makes them worse. Each has a named pattern instead:
 
-- **WebSocket servers.** The TCP connection itself is state pinned to one instance — you cannot move a socket to another machine. The pattern is a **connection registry**: a shared map (often Redis) from user to the instance holding their socket, or a pub/sub channel every instance subscribes to, so any node can deliver a message to whichever node owns the connection. Connection lifecycle details belong to the Long Polling vs WebSockets topic.
+- **WebSocket servers.** The TCP connection itself is state pinned to one instance — you cannot move a socket to another machine. The pattern is a **connection registry**: a shared map (often Redis) from user to the instance holding their socket, or a pub/sub channel every instance subscribes to, so any node can deliver a message to whichever node owns the connection. Connection lifecycle details belong to the [Long Polling vs WebSockets](/SystemDesign/topics/communication-apis/long-polling-vs-websockets/) topic.
 - **Multiplayer game servers.** An authoritative world simulating 30 to 60 ticks per second cannot put its state across a network hop — a 0.5ms Redis read per entity per tick is a non-starter. The pattern is **partitioned ownership**: each match or map region is owned by exactly one process, a matchmaker routes players to their owner, and the owner periodically snapshots to durable storage.
 - **Databases.** Holding state is the whole job. The pattern is **replication with orchestrated failover** — Postgres under Patroni, Redis under Sentinel — where leader election and replica promotion are carefully sequenced and failover is measured in seconds, not milliseconds.
 
@@ -130,4 +136,4 @@ The meta-pattern: when state must live in-process, make its ownership explicit a
 
 ## When to reach for it
 
-Stateless is the default for request/response services — web APIs, workers, anything behind a load balancer. Choose it unless you can name the specific state that must live in-process and the pattern (registry, partitioned ownership, orchestrated failover) you will use to manage it. Accept sticky sessions only as a dated bridge with a removal plan. Do the split early: retrofitting statelessness into a service that has grown local state costs far more than starting with sessions in Redis on day one. How stateless services combine with replication and partitioning is the broader Scaling topic's story.
+Stateless is the default for request/response services — web APIs, workers, anything behind a load balancer. Choose it unless you can name the specific state that must live in-process and the pattern (registry, partitioned ownership, orchestrated failover) you will use to manage it. Accept sticky sessions only as a dated bridge with a removal plan. Do the split early: retrofitting statelessness into a service that has grown local state costs far more than starting with sessions in Redis on day one. How stateless services combine with replication and partitioning is the broader [Scaling](/SystemDesign/topics/scalability/scaling/) topic's story.

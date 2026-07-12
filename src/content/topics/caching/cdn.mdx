@@ -5,6 +5,12 @@ tier: written
 summary: "Content delivery networks: caching at the edge so users hit a server 20ms away instead of 200ms."
 order: 3
 resources: [cdn-article, cdn-deep-dive]
+related:
+  - caching/caching-strategies
+  - scalability/proxy-vs-reverse-proxy
+  - scalability/load-balancing
+  - scalability/availability
+  - caching/bloom-filters
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -45,7 +51,7 @@ The propagation delay is bad, but the multiplier makes it brutal. A fresh HTTPS 
 
 ## A reverse proxy, everywhere
 
-Architecturally, a CDN is a globally distributed reverse-proxy cache (the proxy concept itself is covered under Proxy vs Reverse Proxy). Each point of presence (PoP) is a rack of cache servers in a city; Cloudflare operates PoPs in 300+ cities, Akamai in thousands of locations, CloudFront in hundreds of edge locations, and Fastly in roughly a hundred high-capacity PoPs. Two mechanisms steer users to the nearest one:
+Architecturally, a CDN is a globally distributed reverse-proxy cache (the proxy concept itself is covered under [Proxy vs Reverse Proxy](/SystemDesign/topics/scalability/proxy-vs-reverse-proxy/)). Each point of presence (PoP) is a rack of cache servers in a city; Cloudflare operates PoPs in 300+ cities, Akamai in thousands of locations, CloudFront in hundreds of edge locations, and Fastly in roughly a hundred high-capacity PoPs. Two mechanisms steer users to the nearest one:
 
 - **Anycast** (Cloudflare): every PoP announces the same IP address, and internet routing (BGP) delivers each packet to the topologically closest PoP.
 - **DNS-based steering** (Akamai, CloudFront): the CDN's DNS server returns a different PoP address depending on where the resolver query comes from.
@@ -78,7 +84,7 @@ Cache-Control: public, max-age=60, s-maxage=86400, stale-while-revalidate=30
 - `stale-while-revalidate` lets the edge serve the expired copy instantly while refetching in the background.
 - Content-hashed filenames (`app.3f9c1b.js`) plus `Cache-Control: immutable, max-age=31536000` make invalidation unnecessary: a new deploy is a new URL.
 
-Eviction under memory pressure is the CDN's problem, not yours — the theory lives in Caching Strategies & Eviction Policies.
+Eviction under memory pressure is the CDN's problem, not yours — the theory lives in [Caching Strategies & Eviction Policies](/SystemDesign/topics/caching/caching-strategies/).
 
 ## Invalidation
 

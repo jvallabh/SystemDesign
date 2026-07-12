@@ -5,6 +5,12 @@ tier: written
 summary: "Process data in scheduled chunks or as it arrives — a freshness requirement traded against radical simplicity."
 order: 4
 resources: [batch-stream-video]
+related:
+  - architecture-patterns/message-queues
+  - distributed-systems/idempotency
+  - data-storage/databases
+  - data-storage/cdc
+  - architecture-patterns/sync-vs-async
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -15,7 +21,7 @@ Every data pipeline answers one question: how stale may the answer be? If "as of
 
 Batch processing operates on a **bounded** dataset: a file, a table partition, "all orders from yesterday." The job knows where the data ends, so it can read everything, compute, write a result, and terminate. Correctness is easy to reason about — the input is fixed, the job is a pure function over it, and if the job crashes you simply rerun it. That last property is worth underlining: **reprocessing in batch is trivial**. Found a bug in last month's revenue numbers? Fix the code, rerun the job over last month's data, overwrite the output. The raw data is still sitting there.
 
-Stream processing operates on an **unbounded** dataset: an infinite sequence of events with no end. The job never terminates; it consumes events (typically from a log like Kafka — the Message Queues topic owns that layer) and continuously updates its output. Results are fresh within seconds, but "read everything, then compute" is no longer available — the job must decide what to emit *before* all the data exists.
+Stream processing operates on an **unbounded** dataset: an infinite sequence of events with no end. The job never terminates; it consumes events (typically from a log like Kafka — the [Message Queues](/SystemDesign/topics/architecture-patterns/message-queues/) topic owns that layer) and continuously updates its output. Results are fresh within seconds, but "read everything, then compute" is no longer available — the job must decide what to emit *before* all the data exists.
 
 <Diagram caption="Batch accumulates events and processes the pile on a schedule; streaming processes each event on arrival.">
   <svg viewBox="0 0 660 270" width="100%" role="img" aria-label="Two pipelines compared: a batch pipeline where events collect all day, a nightly job reads the whole set, and results are up to 24 hours stale; and a stream pipeline where an event stream feeds a long-running processor and results are seconds fresh.">
@@ -71,7 +77,7 @@ The moment input is unbounded, three hard problems appear that batch simply neve
 
 **Late data and watermarks.** The pragmatic answer is a **watermark**: the processor's rolling assertion that "I believe I have now seen everything up to time T." When the watermark passes a window's end, the window fires. Events arriving after that are *late*; you choose to drop them, or hold windows open a grace period and emit corrections. The watermark is a bet — set it aggressive and you emit fast but wrong, set it conservative and you reintroduce latency. Batch never faces this: by the time the nightly job runs, the stragglers arrived hours ago.
 
-There is a fourth inherited problem: **state**. A running count is state, and a job that runs forever will crash eventually. Flink's answer is periodic **checkpointing** — snapshot all operator state plus input offsets to durable storage, and on failure rewind to the last snapshot and replay from those offsets. Because state and read-position are restored together, each event's effect lands in state exactly once, even though events may be *processed* more than once. That's exactly-once state updates, not exactly-once delivery — outputs to external systems still need idempotent or transactional sinks (see the Idempotency topic).
+There is a fourth inherited problem: **state**. A running count is state, and a job that runs forever will crash eventually. Flink's answer is periodic **checkpointing** — snapshot all operator state plus input offsets to durable storage, and on failure rewind to the last snapshot and replay from those offsets. Because state and read-position are restored together, each event's effect lands in state exactly once, even though events may be *processed* more than once. That's exactly-once state updates, not exactly-once delivery — outputs to external systems still need idempotent or transactional sinks (see the [Idempotency](/SystemDesign/topics/distributed-systems/idempotency/) topic).
 
 ## Micro-batching: the middle ground
 
@@ -132,4 +138,4 @@ The **kappa architecture** deletes the batch layer: keep the raw event log (Kafk
 
 ## Choosing
 
-Let the freshness requirement choose, and **default to batch** — it is radically simpler, and a nightly Airflow-plus-Spark (or plain warehouse SQL — the Databases topic covers that side) pipeline is understood, debugged, and rerun by any engineer on the team. Move to streaming only when someone can act on a result within seconds of the event: fraud detection that must block the transaction, live operational dashboards, real-time personalization. Billing, invoicing, reporting, and ML training data are batch almost everywhere — correctness and reprocessability matter more than freshness. If you need "fresh-ish" and already run Spark, micro-batching buys seconds-level latency cheaply. And if you do go streaming, prefer kappa with generous log retention over lambda: one codebase whose reprocessing story is "replay the log" beats two codebases whose reconciliation story is "hope."
+Let the freshness requirement choose, and **default to batch** — it is radically simpler, and a nightly Airflow-plus-Spark (or plain warehouse SQL — the [Databases](/SystemDesign/topics/data-storage/databases/) topic covers that side) pipeline is understood, debugged, and rerun by any engineer on the team. Move to streaming only when someone can act on a result within seconds of the event: fraud detection that must block the transaction, live operational dashboards, real-time personalization. Billing, invoicing, reporting, and ML training data are batch almost everywhere — correctness and reprocessability matter more than freshness. If you need "fresh-ish" and already run Spark, micro-batching buys seconds-level latency cheaply. And if you do go streaming, prefer kappa with generous log retention over lambda: one codebase whose reprocessing story is "replay the log" beats two codebases whose reconciliation story is "hope."

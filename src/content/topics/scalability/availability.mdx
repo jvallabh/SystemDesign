@@ -5,6 +5,11 @@ tier: written
 summary: "The nines: what 99.9% vs 99.999% actually means, the composition math behind redundancy, and the patterns that buy each extra nine."
 order: 4
 resources: [availability-video]
+related:
+  - scalability/load-balancing
+  - distributed-systems/cap-theorem
+  - scalability/scaling
+  - architecture-patterns/message-queues
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -83,10 +88,10 @@ Now the parallel case: two replicas at 99.9% each fail 0.1% of the time. Both do
 
 - **Active-passive failover.** One node serves; a standby receives replicated state and gets promoted when health checks fail. Simple, but the standby is paid-for idle capacity, and failover itself takes seconds to minutes — classic for relational database primaries (e.g. RDS Multi-AZ).
 - **Active-active.** All nodes serve traffic simultaneously; losing one just shrinks capacity. Better utilization and near-zero failover time, but every node must handle concurrent writes or be stateless.
-- **Health checks.** Redundancy is useless if traffic keeps flowing to a dead node. Shallow checks (TCP accept) detect crashes; deep checks (execute a real query) detect zombies that accept connections but return garbage. Probe mechanics — intervals, thresholds, draining — live in the Load Balancing topic.
-- **Multi-AZ and multi-region.** AZs protect against a datacenter failure; regions protect against regional outages (think AWS us-east-1). Multi-region active-active is the gold standard and also where CAP Theorem's consistency trade-offs start to bite.
+- **Health checks.** Redundancy is useless if traffic keeps flowing to a dead node. Shallow checks (TCP accept) detect crashes; deep checks (execute a real query) detect zombies that accept connections but return garbage. Probe mechanics — intervals, thresholds, draining — live in the [Load Balancing](/SystemDesign/topics/scalability/load-balancing/) topic.
+- **Multi-AZ and multi-region.** AZs protect against a datacenter failure; regions protect against regional outages (think AWS us-east-1). Multi-region active-active is the gold standard and also where [CAP Theorem](/SystemDesign/topics/distributed-systems/cap-theorem/)'s consistency trade-offs start to bite.
 - **Graceful degradation.** A degraded answer beats no answer. Netflix serves unpersonalized fallback rows when its recommendation service is down; an e-commerce site can take orders while the reviews widget fails silently. Classify each dependency as critical or shed-able up front.
-- **Circuit breakers and bulkheads.** A circuit breaker stops calling a failing dependency after repeated errors, returning a fallback immediately instead of stacking up timed-out threads. Bulkheads cap the resources (connections, threads) any one dependency can consume, so one slow downstream cannot exhaust the whole service. Both turn a dependency's outage into your degradation, not your outage; Message Queues add a similar decoupling lever for async work.
+- **Circuit breakers and bulkheads.** A circuit breaker stops calling a failing dependency after repeated errors, returning a fallback immediately instead of stacking up timed-out threads. Bulkheads cap the resources (connections, threads) any one dependency can consume, so one slow downstream cannot exhaust the whole service. Both turn a dependency's outage into your degradation, not your outage; [Message Queues](/SystemDesign/topics/architecture-patterns/message-queues/) add a similar decoupling lever for async work.
 
 <Diagram caption="Active-passive failover: health checks detect the dead primary and promote the replicated standby.">
   <svg viewBox="0 0 640 260" width="100%" role="img" aria-label="A load balancer sends traffic to an active primary and runs health checks on it. A passive standby receives replication from the primary and is promoted when the primary's health check fails.">

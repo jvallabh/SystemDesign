@@ -6,6 +6,11 @@ summary: "Token bucket, leaky bucket, and window counters — how each admits bu
 order: 2
 sim: RateLimitingSim
 resources: [rate-limiting-video]
+related:
+  - communication-apis/api-gateways
+  - scalability/availability
+  - scalability/load-balancing
+  - communication-apis/apis
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -113,7 +118,7 @@ The differences are easiest to feel by watching them side by side. In the simula
 
 ## Making it work in production
 
-**What to key on.** A limit is meaningless until you decide whose counter increments. API key or user ID is the honest identity for authenticated traffic. IP address is the fallback for anonymous traffic, but it punishes users behind corporate NAT and barely slows an attacker with a botnet. Real systems layer keys: a global per-IP ceiling at the edge, per-API-key quotas at the gateway (the enforcement point the API Gateways topic covers in depth), and per-endpoint limits for expensive operations — a search endpoint deserves a tighter budget than a health check.
+**What to key on.** A limit is meaningless until you decide whose counter increments. API key or user ID is the honest identity for authenticated traffic. IP address is the fallback for anonymous traffic, but it punishes users behind corporate NAT and barely slows an attacker with a botnet. Real systems layer keys: a global per-IP ceiling at the edge, per-API-key quotas at the gateway (the enforcement point the [API Gateways](/SystemDesign/topics/communication-apis/api-gateways/) topic covers in depth), and per-endpoint limits for expensive operations — a search endpoint deserves a tighter budget than a health check.
 
 **Distributed counters.** With one server, an in-memory counter works. With twenty, each node limiting locally multiplies every quota by twenty. The standard fix is centralized state in Redis — but the naive `GET`, check, `SET` sequence is a read-modify-write race: two nodes read 99, both admit, both write 100, and the quota leaks under exactly the concurrency the limiter exists to handle. Fixed windows dodge this because `INCR` is atomic: increment first, then compare the returned value to the quota. Token bucket state (tokens plus timestamp) cannot be updated atomically with plain commands, so it goes in a short Lua script, which Redis executes atomically:
 
@@ -137,7 +142,7 @@ This adds a network round trip (typically 0.5–1ms to a co-located Redis) to ev
 
 - **Burst size is a capacity promise.** Token bucket's `b` is the spike your backend must survive. Teams tune `r` carefully and leave `b` at a careless default.
 - **Limiting late wastes the win.** A limiter after your app has parsed, authenticated, and queried still spent the resources it was protecting. Enforce as early as the key allows: IP limits at the edge, key limits at the gateway.
-- **Central store as a new failure point.** If Redis is down, does the limiter fail open (unprotected) or closed (self-inflicted outage)? Most APIs fail open with an alert; abuse-critical paths like login fail closed. Decide explicitly — the Availability topic covers the surrounding protective patterns.
+- **Central store as a new failure point.** If Redis is down, does the limiter fail open (unprotected) or closed (self-inflicted outage)? Most APIs fail open with an alert; abuse-critical paths like login fail closed. Decide explicitly — the [Availability](/SystemDesign/topics/scalability/availability/) topic covers the surrounding protective patterns.
 - **Silent throttling breeds retry storms.** Rejecting without 429 and `Retry-After` guarantees clients hammer harder. The response contract is part of the algorithm.
 - **One global limit is a blunt instrument.** Cheap and expensive endpoints under one counter means scrapers exhaust quota that real users needed.
 

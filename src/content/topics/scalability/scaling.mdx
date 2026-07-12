@@ -6,6 +6,12 @@ summary: "Vertical vs horizontal scaling: push load against one big box or many 
 order: 3
 sim: ScalingSim
 resources: [scaling-course]
+related:
+  - scalability/load-balancing
+  - scalability/stateful-vs-stateless
+  - data-storage/sharding-and-partitioning
+  - caching/caching-strategies
+  - scalability/availability
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -19,7 +25,7 @@ Vertical scaling ("scaling up") is the move that requires no engineering. The sa
 
 It has three structural problems. Cost grows superlinearly: the top of the range costs far more per unit of compute than the middle, because exotic hardware carries a premium and doubling cores rarely doubles throughput once memory bandwidth and lock contention bite. There is a hard ceiling: at some point no bigger box exists at any price. And it is a single failure domain: when the big box dies, everything dies with it, so the redundancy story is a second big box sitting mostly idle.
 
-Horizontal scaling ("scaling out") inverts all three. Commodity machines price linearly, capacity has no practical ceiling, and losing one node out of twenty costs 5 percent of capacity instead of 100. The price is architectural: requests must be spreadable across machines (Load Balancing), the machines must not care which request lands where (Stateful vs Stateless), and once the data itself outgrows one box it has to be split (Sharding and Partitioning). None of that is free, and all of it has to exist before the second server helps at all.
+Horizontal scaling ("scaling out") inverts all three. Commodity machines price linearly, capacity has no practical ceiling, and losing one node out of twenty costs 5 percent of capacity instead of 100. The price is architectural: requests must be spreadable across machines ([Load Balancing](/SystemDesign/topics/scalability/load-balancing/)), the machines must not care which request lands where ([Stateful vs Stateless](/SystemDesign/topics/scalability/stateful-vs-stateless/)), and once the data itself outgrows one box it has to be split ([Sharding and Partitioning](/SystemDesign/topics/data-storage/sharding-and-partitioning/)). None of that is free, and all of it has to exist before the second server helps at all.
 
 |                  | Vertical (up)                     | Horizontal (out)                          |
 | ---------------- | --------------------------------- | ----------------------------------------- |
@@ -85,7 +91,7 @@ Almost every web application walks the same road, and each step exists because t
 
 1. **One box, scaled up.** App and database together. Correct until it isn't. Stack Overflow famously served billions of monthly page views from a handful of large web servers and two beefy SQL Server machines — scale-up carries further than intuition suggests.
 2. **Stateless web tier behind a load balancer.** Move sessions out of process, put N identical app servers behind an LB. The web tier now scales by cloning; the database is untouched — and becomes the next bottleneck.
-3. **Cache.** Most workloads read far more than they write, so a cache absorbs the bulk of read traffic before it touches the database (Caching Strategies covers the how).
+3. **Cache.** Most workloads read far more than they write, so a cache absorbs the bulk of read traffic before it touches the database ([Caching Strategies](/SystemDesign/topics/caching/caching-strategies/) covers the how).
 4. **Read replicas.** Reads that miss the cache fan out across copies of the database; the primary handles only writes.
 5. **Sharding.** When write volume or data size outgrows one primary, the data itself gets split across machines. This is the expensive step — cross-shard queries and transactions stop being free — which is exactly why it comes last.
 
@@ -123,4 +129,4 @@ Autoscaling is horizontal scaling on a feedback loop, and the loop has sharp edg
 
 ## When to reach for which
 
-Scale up when you are under the ceiling and the team is small: it is the cheapest capacity per engineering hour that exists, and databases in particular reward big machines. Go horizontal when any of these becomes true: availability requirements demand surviving a machine failure (which forces at least two nodes regardless of load), traffic genuinely approaches the biggest box you can buy, load is spiky enough that elasticity beats provisioning for peak, or the superlinear price of the next box size upgrade exceeds the cost of the plumbing. And whichever path you take today, keep the application stateless — it costs little now and it is the one prerequisite you cannot retrofit under fire.
+Scale up when you are under the ceiling and the team is small: it is the cheapest capacity per engineering hour that exists, and databases in particular reward big machines. Go horizontal when any of these becomes true: [availability](/SystemDesign/topics/scalability/availability/) requirements demand surviving a machine failure (which forces at least two nodes regardless of load), traffic genuinely approaches the biggest box you can buy, load is spiky enough that elasticity beats provisioning for peak, or the superlinear price of the next box size upgrade exceeds the cost of the plumbing. And whichever path you take today, keep the application stateless — it costs little now and it is the one prerequisite you cannot retrofit under fire.

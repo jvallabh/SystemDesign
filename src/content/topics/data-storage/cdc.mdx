@@ -5,6 +5,12 @@ tier: written
 summary: "Streaming every database change as an event: how CDC keeps caches, search indexes, and warehouses in sync without dual-write bugs."
 order: 5
 resources: [cdc-confluent-article, cdc-redhat-article]
+related:
+  - architecture-patterns/message-queues
+  - data-storage/databases
+  - distributed-systems/idempotency
+  - caching/caching-strategies
+  - architecture-patterns/batch-vs-stream
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -79,7 +85,7 @@ Polling is the duct-tape version: cheap to build, but it misses deletes, misses 
 
 Every committed transaction is appended to the log before it is acknowledged; that is what makes the log authoritative. A log-based CDC connector — Debezium is the de facto open-source standard — connects like a replication client, decodes the log into row-level events (`op: c/u/d`, before-image, after-image, source position), and publishes them to Kafka, typically one topic per table, keyed by primary key.
 
-That keying choice carries the ordering guarantee: Kafka preserves order within a partition, and all events for one key hash to one partition, so every consumer sees the changes to a given row in exactly the order the database committed them. Order across different keys is not guaranteed — and almost never needed. Broker internals belong to the Message Queues topic; what matters here is that per-key ordering survives the whole pipeline.
+That keying choice carries the ordering guarantee: Kafka preserves order within a partition, and all events for one key hash to one partition, so every consumer sees the changes to a given row in exactly the order the database committed them. Order across different keys is not guaranteed — and almost never needed. Broker internals belong to the [Message Queues](/SystemDesign/topics/architecture-patterns/message-queues/) topic; what matters here is that per-key ordering survives the whole pipeline.
 
 Two operational realities come with the territory. First, **snapshots**: a new pipeline (or a new consumer, like a freshly built search index) needs the current state, not just changes from now on, so connectors perform an initial consistent snapshot of each table and then switch to the log at the exact position the snapshot represents. Second, **schema evolution**: `ALTER TABLE` changes the shape of subsequent events, so production pipelines run a schema registry and choose compatible evolution (add nullable columns; never repurpose one) — otherwise a Tuesday migration breaks every consumer Wednesday morning.
 
@@ -121,7 +127,7 @@ Raw CDC events are row-shaped: "row 42 in `orders` changed." Sometimes downstrea
 
 ## Delivery semantics
 
-CDC pipelines are at-least-once, not exactly-once. A connector that crashes after publishing but before checkpointing its log position replays a window of events on restart. Consumers must therefore be idempotent: applying "set row 42 to shipped" twice is harmless, and upserts keyed by primary key make most CDC consumers naturally so. For consumers that count or append rather than overwrite, deduplicate on the event's log position (LSN / binlog offset), which uniquely identifies each change.
+CDC pipelines are at-least-once, not exactly-once. A connector that crashes after publishing but before checkpointing its log position replays a window of events on restart. Consumers must therefore be [idempotent](/SystemDesign/topics/distributed-systems/idempotency/): applying "set row 42 to shipped" twice is harmless, and upserts keyed by primary key make most CDC consumers naturally so. For consumers that count or append rather than overwrite, deduplicate on the event's log position (LSN / binlog offset), which uniquely identifies each change.
 
 ## Trade-offs and pitfalls
 
@@ -133,4 +139,4 @@ CDC pipelines are at-least-once, not exactly-once. A connector that crashes afte
 
 ## When to reach for it
 
-Reach for CDC the moment two or more downstream systems mirror the same database, or when you catch yourself writing "update X, then also update Y" in application code — that line is a bug you have not met yet. Cache invalidation feeds, search indexing, warehouse replication, and audit trails are the canonical wins, and Debezium into Kafka is the default stack unless your cloud's managed equivalent (like AWS DMS) already fits. Skip it when a single consumer can tolerate minutes of staleness — a cron job reading `updated_at` is honestly fine — and remember that CDC moves state changes; if what you need is commands or workflows between services, that is Message Queues territory, not a changelog.
+Reach for CDC the moment two or more downstream systems mirror the same database, or when you catch yourself writing "update X, then also update Y" in application code — that line is a bug you have not met yet. [Cache invalidation](/SystemDesign/topics/caching/caching-strategies/) feeds, search indexing, warehouse replication, and audit trails are the canonical wins, and Debezium into Kafka is the default stack unless your cloud's managed equivalent (like AWS DMS) already fits. Skip it when a single consumer can tolerate minutes of staleness — a cron job reading `updated_at` is honestly fine — and remember that CDC moves state changes; if what you need is commands or workflows between services, that is Message Queues territory, not a changelog.

@@ -5,6 +5,11 @@ tier: written
 summary: "Designing operations that are safe to retry — the property that makes at-least-once delivery survivable."
 order: 4
 resources: [idempotency-video]
+related:
+  - architecture-patterns/message-queues
+  - communication-apis/webhooks
+  - data-storage/acid-transactions
+  - communication-apis/rest
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -56,7 +61,7 @@ HTTP bakes this distinction into its verbs:
 
 Note what DELETE illustrates: idempotency is about resulting *state*, not identical responses. The second delete may return a different status code; the database looks the same either way.
 
-Retries are not optional — every serious HTTP client, load balancer, and queue consumer retries. So the real question for any mutating endpoint is: what happens when this arrives twice? For PUT-shaped operations, nothing. For "charge the card," "place the order," "send the email" — POST-shaped operations — you need to add idempotency deliberately.
+Retries are not optional — every serious HTTP client, [load balancer](/SystemDesign/topics/scalability/load-balancing/), and queue consumer retries. So the real question for any mutating endpoint is: what happens when this arrives twice? For PUT-shaped operations, nothing. For "charge the card," "place the order," "send the email" — POST-shaped operations — you need to add idempotency deliberately.
 
 ## The idempotency-key pattern
 
@@ -94,7 +99,7 @@ The standard fix, with Stripe's API as the canonical design:
 
 Two failure modes make step 2's atomicity load-bearing:
 
-**Partial failure mid-operation.** If the server charges the card, then crashes before recording the key, the retry re-charges. Write the key record and the side effect in the same database transaction. When the side effect is a call to an external system, record the key in a "pending" state first, make the call passing your own idempotency key downstream, then mark it complete — a crash between steps is then detectable and reconcilable instead of silently duplicated.
+**Partial failure mid-operation.** If the server charges the card, then crashes before recording the key, the retry re-charges. Write the key record and the side effect in the same [database transaction](/SystemDesign/topics/data-storage/acid-transactions/). When the side effect is a call to an external system, record the key in a "pending" state first, make the call passing your own idempotency key downstream, then mark it complete — a crash between steps is then detectable and reconcilable instead of silently duplicated.
 
 **Concurrent duplicates.** A client whose timeout is shorter than your processing time retries while attempt one is still running. A read-then-execute check races: both requests see "key absent" and both execute. The fix is to make the key row itself the lock — insert it under a unique constraint before doing any work. The loser of the race either waits for the winner's result or gets an immediate 409, which is what Stripe returns for a concurrent reuse of a key.
 
@@ -116,7 +121,7 @@ You rarely need to hand-roll the mechanics; databases ship idempotency primitive
 
 ## The exactly-once myth
 
-You will hear "exactly-once delivery" promised; over a lossy network it is impossible. If an acknowledgment can be lost, the sender must either retry (risking duplicates — at-least-once) or not (risking loss — at-most-once). Any system that cares about not losing data therefore chooses at-least-once — which is why message queues and webhook providers all deliver duplicates.
+You will hear "exactly-once delivery" promised; over a lossy network it is impossible. If an acknowledgment can be lost, the sender must either retry (risking duplicates — at-least-once) or not (risking loss — at-most-once). Any system that cares about not losing data therefore chooses at-least-once — which is why [message queues](/SystemDesign/topics/architecture-patterns/message-queues/) and [webhook](/SystemDesign/topics/communication-apis/webhooks/) providers all deliver duplicates.
 
 What *is* achievable is exactly-once **processing**: at-least-once delivery plus an idempotent handler equals effectively-once outcomes. Duplicates still arrive; they just stop mattering. Kafka's celebrated "exactly-once semantics" is this same move — producer sequence numbers for dedupe plus transactions — applied within its own ecosystem, not a repeal of the underlying physics.
 

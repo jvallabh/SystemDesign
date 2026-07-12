@@ -5,6 +5,7 @@ tier: written
 summary: "Self-contained signed tokens that let any service verify a caller's identity without a session-store lookup."
 order: 7
 resources: [jwts-video]
+related: [communication-apis/api-gateways, scalability/stateful-vs-stateless, scalability/scaling, communication-apis/rest, scalability/load-balancing]
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -45,7 +46,7 @@ Base64url is an encoding, not encryption. Anyone who intercepts a JWT can paste 
 
 HS256 signs with HMAC-SHA256 over a shared secret: the same key signs and verifies. That is fine inside one trust boundary — a monolith, or two services owned by the same team — but every service that can verify can also mint valid tokens, so a compromise of any verifier compromises the issuer.
 
-RS256 (and its faster elliptic-curve sibling ES256) splits the roles: the auth server signs with a private key, and everyone else verifies with the public key, typically fetched from a published JWKS endpoint and cached. Fifty microservices — or third parties entirely, as with Google and Auth0 identity tokens — can verify without any of them being able to forge. The `kid` header field names which key signed the token, which is what makes key rotation routine instead of an outage.
+RS256 (and its faster elliptic-curve sibling ES256) splits the roles: the auth server signs with a private key, and everyone else verifies with the public key, typically fetched from a published JWKS endpoint and cached. Fifty microservices — or third parties entirely, as with Google and Auth0 identity tokens — can verify without any of them being able to forge. The `kid` header field names which key signed the token, which is what makes key rotation routine instead of an outage. In practice, many fleets verify the token once at an [API gateway](/SystemDesign/topics/communication-apis/api-gateways/) and forward a trusted identity header downstream; per-service verification remains the norm in zero-trust setups, where every hop re-checks the token itself.
 
 <Diagram caption="Asymmetric signing: only the auth service can mint tokens, but every service verifies locally — no per-request call to the issuer.">
   <svg viewBox="0 0 640 260" width="100%" role="img" aria-label="A client logs in to an auth service and receives a signed JWT. The client then sends requests carrying the JWT to an orders service and a billing service, each of which verifies the signature locally using the auth service's public key.">
@@ -77,7 +78,7 @@ RS256 (and its faster elliptic-curve sibling ES256) splits the roles: the auth s
 
 ## Sessions vs JWTs
 
-The stateless-verification property is the whole reason JWTs scale horizontally: any of a hundred instances behind a load balancer can validate a request with a few microseconds of CPU, with no sticky sessions and no round trip to a shared Redis on every call — a trip that costs around a millisecond and adds a stateful system that can fail. The direct comparison:
+The stateless-verification property is the whole reason JWTs [scale horizontally](/SystemDesign/topics/scalability/scaling/): any of a hundred instances behind a [load balancer](/SystemDesign/topics/scalability/load-balancing/) can validate a request with a few microseconds of CPU, with no sticky sessions and no round trip to a shared Redis on every call — a trip that costs around a millisecond and adds a stateful system that can fail. The direct comparison:
 
 | | Server-side sessions | JWTs |
 |---|---|---|

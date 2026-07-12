@@ -8,9 +8,24 @@ import { withBase } from '../utils/url';
 interface Props {
   title: string;
   description?: string;
+  ogType?: 'website' | 'article';
 }
 
-const { title, description = 'Interactive explanations of system design concepts.' } = Astro.props;
+const {
+  title,
+  description = 'Interactive explanations of system design concepts.',
+  ogType = 'website',
+} = Astro.props;
+
+// Build the absolute page URL with exactly one base prefix, regardless of
+// whether Astro.url.pathname already includes it in this build mode.
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const rawPath = Astro.url.pathname;
+const pagePath = rawPath === base || rawPath.startsWith(`${base}/`) ? rawPath : `${base}${rawPath}`;
+// All pages build as directories (build.format 'directory'), so the served URL
+// always ends in '/'. Normalize so canonical/og:url match it (and the sitemap).
+const pageUrl = new URL(pagePath.endsWith('/') ? pagePath : `${pagePath}/`, Astro.site).href;
+const ogImage = new URL(withBase('/og-card.png'), Astro.site).href;
 ---
 
 <!doctype html>
@@ -20,6 +35,19 @@ const { title, description = 'Interactive explanations of system design concepts
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href={withBase('/favicon.svg')} />
+    <link rel="canonical" href={pageUrl} />
+    <meta property="og:site_name" content="System Design Atlas" />
+    <meta property="og:title" content={`${title} · System Design Atlas`} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content={ogType} />
+    <meta property="og:url" content={pageUrl} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={`${title} · System Design Atlas`} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
     <title>{title} · System Design Atlas</title>
     <script is:inline>
       const stored = localStorage.getItem('theme');
@@ -32,7 +60,24 @@ const { title, description = 'Interactive explanations of system design concepts
     <div class="shell">
       <input type="checkbox" id="nav-open" hidden />
       <header class="topbar">
-        <label for="nav-open" class="nav-toggle" aria-label="Toggle navigation">☰</label>
+        <label for="nav-open" class="nav-toggle" tabindex="0" role="button" aria-label="Toggle navigation"
+          >☰</label
+        >
+        <script is:inline>
+          (() => {
+            const toggle = document.querySelector('.nav-toggle');
+            const box = document.getElementById('nav-open');
+            const sync = () => toggle.setAttribute('aria-expanded', String(box.checked));
+            sync();
+            box.addEventListener('change', sync);
+            toggle.addEventListener('keydown', (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                box.click(); // toggles the checkbox and fires `change`, unlike setting .checked
+              }
+            });
+          })();
+        </script>
         <span class="topbar-title">System Design Atlas</span>
         <ThemeToggle />
       </header>

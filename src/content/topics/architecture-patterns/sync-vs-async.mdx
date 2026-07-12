@@ -5,6 +5,12 @@ tier: written
 summary: "Blocking calls vs fire-and-forget: how one choice ripples through availability, latency, consistency, and debugging."
 order: 3
 resources: [sync-async-video]
+related:
+  - architecture-patterns/message-queues
+  - distributed-systems/concurrency-vs-parallelism
+  - distributed-systems/idempotency
+  - architecture-patterns/services
+  - communication-apis/webhooks
 ---
 import Diagram from '../../../components/Diagram.astro';
 
@@ -18,16 +24,16 @@ Asynchronous routes through an intermediary, usually a queue or event stream. Fo
 
 - **Request/response** — synchronous; the answer comes back on the same connection.
 - **Fire-and-forget** — the caller publishes and never looks back. Right for work whose failure the caller cannot act on anyway (analytics, log shipping).
-- **Request/async-reply** — the caller gets an immediate acknowledgment (HTTP 202 plus a job ID); the real result arrives later via a status endpoint, webhook, or push channel.
+- **Request/async-reply** — the caller gets an immediate acknowledgment (HTTP 202 plus a job ID); the real result arrives later via a status endpoint, [webhook](/SystemDesign/topics/communication-apis/webhooks/), or push channel.
 - **Commands vs events** — a *command* ("charge this card") is addressed to one owner who must act; an *event* ("order 4412 was placed") states a fact that any number of subscribers may react to. Events invert the dependency: the producer does not know who listens.
 
 ## What synchronous really costs
 
-**Availability chains.** A synchronous call succeeds only if every link succeeds, so availabilities multiply. Say checkout calls auth, pricing, payment, and fraud-check in sequence, each an honest 99.9% available. The chain delivers 0.999 to the fourth power, about 99.6% — and with your own service's 99.9% on top, roughly 99.5%. You went from about 43 minutes of downtime a month per service to about 3.6 hours for the user-facing flow — without any single team doing anything wrong. The Availability topic works this math in depth.
+**Availability chains.** A synchronous call succeeds only if every link succeeds, so availabilities multiply. Say checkout calls auth, pricing, payment, and fraud-check in sequence, each an honest 99.9% available. The chain delivers 0.999 to the fourth power, about 99.6% — and with your own service's 99.9% on top, roughly 99.5%. You went from about 43 minutes of downtime a month per service to about 3.6 hours for the user-facing flow — without any single team doing anything wrong. The [Availability](/SystemDesign/topics/scalability/availability/) topic works this math in depth.
 
-**Latency adds serially.** Five hops at a 20ms median each is a 100ms floor before your own code runs — and tails compound worse than medians, because any single slow hop delays the whole request.
+**Latency adds serially.** Five hops at a 20ms median each — a full call here, the callee's own work included, not just the raw network transit — is a 100ms floor before your own code runs — and tails compound worse than medians, because any single slow hop delays the whole request.
 
-**Slowness cascades.** When one dependency degrades, callers' threads pile up waiting on it, the caller's thread pool exhausts, and now *it* is down for everyone — a full outage grown from one slow service. The survival kit for synchronous calls fits in one paragraph: put a **timeout** on every call, budgeted so the whole chain finishes inside your SLA; **retry** with exponential backoff and jitter, but only operations that are safe to repeat (the Idempotency topic owns that ground); and wrap flaky dependencies in a **circuit breaker** that fails fast once error rates spike instead of letting threads queue up behind a corpse. This kit is mandatory equipment, not an optimization.
+**Slowness cascades.** When one dependency degrades, callers' threads pile up waiting on it, the caller's thread pool exhausts, and now *it* is down for everyone — a full outage grown from one slow service. The survival kit for synchronous calls fits in one paragraph: put a **timeout** on every call, budgeted so the whole chain finishes inside your SLA; **retry** with exponential backoff and jitter, but only operations that are safe to repeat (the [Idempotency](/SystemDesign/topics/distributed-systems/idempotency/) topic owns that ground); and wrap flaky dependencies in a **circuit breaker** that fails fast once error rates spike instead of letting threads queue up behind a corpse. This kit is mandatory equipment, not an optimization.
 
 <Diagram caption="Synchronous chains block the caller end-to-end; asynchronous hand-off lets the caller acknowledge fast and decouples its uptime from the consumer's.">
   <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="Top: a synchronous chain where a client calls order service, which calls payment, which calls a bank API, with dashed replies returning; latency adds and availability multiplies. Bottom: an asynchronous flow where the client publishes to a queue, gets a fast ack, and an email service consumes later.">
@@ -76,9 +82,9 @@ Asynchronous routes through an intermediary, usually a queue or event stream. Fo
 
 Async breaks the availability chain: the producer only needs the broker up, not the consumer, and a well-run Kafka or SQS deployment is more available than most application services. The queue also absorbs spikes — a flash sale that would have melted a synchronous email service just becomes a deeper backlog that drains over minutes.
 
-The bill arrives as correctness and observability work — the async counterpart of the survival kit. Brokers deliver **at least once** and order messages only per key, if at all (the mechanics — acks, redelivery, partitions — belong to the Message Queues topic). The consequences land on you: every consumer must be **idempotent** — processing a message twice must equal processing it once, typically via a deduplication key — and must either tolerate reordering or key by the entity that needs order (all events for order 4412 on one key). And because one user action now spans several processes and several seconds, stamp a **correlation ID** at the edge and carry it in every message, or the flow is unreconstructable from logs.
+The bill arrives as correctness and observability work — the async counterpart of the survival kit. Brokers deliver **at least once** and order messages only per key, if at all (the mechanics — acks, redelivery, partitions — belong to the [Message Queues](/SystemDesign/topics/architecture-patterns/message-queues/) topic). The consequences land on you: every consumer must be **idempotent** — processing a message twice must equal processing it once, typically via a deduplication key — and must either tolerate reordering or key by the entity that needs order (all events for order 4412 on one key). And because one user action now spans several processes and several seconds, stamp a **correlation ID** at the edge and carry it in every message, or the flow is unreconstructable from logs.
 
-Finally, the UX problem: the caller got a 202, so where is the result? You need a status endpoint to poll, a webhook when the job finishes, or a server push channel (the Long Polling vs WebSockets topic covers that side).
+Finally, the UX problem: the caller got a 202, so where is the result? You need a status endpoint to poll, a webhook when the job finishes, or a server push channel (the [Long Polling vs WebSockets](/SystemDesign/topics/communication-apis/long-polling-vs-websockets/) topic covers that side).
 
 ## Side by side
 

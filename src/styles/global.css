@@ -4,8 +4,10 @@
   box-sizing: border-box;
 }
 
-html {
-  scroll-behavior: smooth;
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
 }
 
 body {
@@ -63,6 +65,13 @@ svg {
 
 ::selection {
   background: var(--accent-dim);
+}
+
+/* Consistent keyboard focus indicator for all interactive elements
+   (links, buttons, sliders, toggles, skip link). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .skip-link {

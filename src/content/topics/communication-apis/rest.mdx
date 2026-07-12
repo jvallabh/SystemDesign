@@ -5,6 +5,7 @@ tier: written
 summary: "The architectural style behind most web APIs: resources, verbs, statelessness, and why it won."
 order: 4
 resources: [rest-video]
+related: [communication-apis/rest-grpc-graphql-trpc, communication-apis/apis, scalability/stateful-vs-stateless, communication-apis/jwts, distributed-systems/idempotency]
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -17,9 +18,9 @@ Fielding derived REST by adding constraints one at a time and noting what proper
 
 - **Client-server** — the UI and the data storage evolve independently. Your iOS app and your database ship on different schedules; the interface between them is the contract.
 - **Stateless** — every request carries everything needed to process it. The server keeps no conversation memory between requests. This is the constraint that pays the biggest dividends (more below).
-- **Cacheable** — responses declare whether they may be reused. A `GET` with `Cache-Control: max-age=300` can be answered by a browser cache, a corporate proxy, or a CDN edge without your server ever seeing it.
+- **Cacheable** — responses declare whether they may be reused. A `GET` with `Cache-Control: max-age=300` can be answered by a browser cache, a corporate proxy, or a [CDN](/SystemDesign/topics/caching/cdn/) edge without your server ever seeing it.
 - **Uniform interface** — the same small verb set applies to every resource. An intermediary that has never heard of your app still knows `GET /orders/42` is a safe read it may cache and retry.
-- **Layered system** — a client cannot tell whether it is talking to the origin or to a proxy three hops away. That opacity is precisely what lets you insert a CDN or an API gateway later without touching a single client.
+- **Layered system** — a client cannot tell whether it is talking to the origin or to a proxy three hops away. That opacity is precisely what lets you insert a CDN or an [API gateway](/SystemDesign/topics/communication-apis/api-gateways/) later without touching a single client.
 
 A sixth constraint, **code-on-demand** (servers shipping executable code to clients), is explicitly optional and rarely relevant to API design.
 
@@ -52,11 +53,11 @@ The verbs carry machine-readable promises. **Safe** means no state change — in
 | PATCH | no | no by default | partial update |
 | POST | no | no | create, or anything non-idempotent |
 
-These promises are load-bearing. A load balancer can transparently retry an idempotent `PUT` against another replica after a timeout; retrying a `POST` might charge a card twice, which is why payment APIs bolt on idempotency keys to recover the property POST lacks.
+These promises are load-bearing. A [load balancer](/SystemDesign/topics/scalability/load-balancing/) can transparently retry an idempotent `PUT` against another replica after a timeout; retrying a `POST` might charge a card twice, which is why payment APIs bolt on [idempotency keys](/SystemDesign/topics/distributed-systems/idempotency/) to recover the property POST lacks.
 
 ## Statelessness is the scaling constraint
 
-Because no request depends on server-side conversation state, any replica can serve any request. Add a tenth server and the load balancer can use it immediately — no session affinity, no sticky routing, no state to migrate when a server dies. Client identity travels in the request itself (a bearer token, covered in depth under JWTs), and durable state lives in the database. The broader trade-off has its own page, Stateful vs Stateless; here it is enough to see that statelessness is what makes "just add more servers" true.
+Because no request depends on server-side conversation state, any replica can serve any request. Add a tenth server and the load balancer can use it immediately — no session affinity, no sticky routing, no state to migrate when a server dies. Client identity travels in the request itself (a bearer token, covered in depth under [JWTs](/SystemDesign/topics/communication-apis/jwts/)), and durable state lives in the database. The broader trade-off has its own page, [Stateful vs Stateless](/SystemDesign/topics/scalability/stateful-vs-stateless/); here it is enough to see that statelessness is what makes "just add more servers" true.
 
 <Diagram caption="Stateless requests carry their own context, so the load balancer can send any request to any replica — and retire or add replicas freely.">
   <svg viewBox="0 0 640 240" width="100%" role="img" aria-label="A client sends a request carrying a bearer token to a load balancer, which can route it to any of three identical API servers because none of them holds session state.">
@@ -120,13 +121,13 @@ The industry converged on a dialect that the original dissertation never mention
 - **Shallow nesting**: `/orders/42/items` is fine; three levels deep is a smell. If an item has a global ID, expose `/items/7` directly.
 - **Filtering and sorting via query string**: `GET /orders?status=shipped&sort=-created_at`.
 - **Pagination always**, from day one: cursor-based (`?cursor=abc&limit=50`) survives concurrent inserts; offset-based breaks under them. Stripe's `starting_after` cursors are the reference design.
-- **Versioning**: a URL prefix (`/v2/orders`) is crude but visible and cacheable; header-based versioning is purer and nearly invisible in logs. Pick one; general contract-evolution strategy belongs to the APIs page.
+- **Versioning**: a URL prefix (`/v2/orders`) is crude but visible and cacheable; header-based versioning is purer and nearly invisible in logs. Pick one; general contract-evolution strategy belongs to the [APIs](/SystemDesign/topics/communication-apis/apis/) page.
 
 ## Common mistakes
 
 - **Verbs in URLs.** `POST /getUserData` throws away the uniform interface — no cache, proxy, or engineer can infer anything from it. That is RPC wearing REST's clothes.
 - **200 with an error body.** Returning `200 OK` wrapping `"success": false` blinds every layer that speaks HTTP: caches store the failure, monitors report green, retry logic never fires. The status code is the contract.
-- **Chatty resource design.** Rendering one screen should not take 15 sequential GETs; at 50ms per round trip that is 750ms of pure waterfall. Design coarse resources around read patterns, or offer expansion (`?expand=customer`) — this under-fetching problem is the itch GraphQL was built to scratch, compared properly on the API-styles page.
+- **Chatty resource design.** Rendering one screen should not take 15 sequential GETs; at 50ms per round trip that is 750ms of pure waterfall. Design coarse resources around read patterns, or offer expansion (`?expand=customer`) — this under-fetching problem is the itch GraphQL was built to scratch, compared properly on the [API-styles page](/SystemDesign/topics/communication-apis/rest-grpc-graphql-trpc/).
 - **Non-idempotent retries.** If a `POST` can be retried by a client on timeout, accept an idempotency key or you will eventually double-charge someone.
 
 ## When to reach for it

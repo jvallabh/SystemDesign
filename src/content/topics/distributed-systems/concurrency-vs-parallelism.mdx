@@ -5,6 +5,11 @@ tier: written
 summary: "Dealing with many things at once vs doing many things at once — and why the distinction changes your design."
 order: 5
 resources: [concurrency-parallelism-video]
+related:
+  - scalability/scaling
+  - architecture-patterns/sync-vs-async
+  - scalability/stateful-vs-stateless
+  - scalability/load-balancing
 ---
 
 import Diagram from '../../../components/Diagram.astro';
@@ -127,7 +132,7 @@ One language-level wrinkle worth knowing: CPython's **GIL** (global interpreter 
 
 ## The systems-level bridge
 
-The same distinction scales up a level. A horizontally scaled service — 40 stateless replicas behind a load balancer — is **parallelism across machines**: many requests physically executing at once. Inside each replica, a request handler that fires three database queries and awaits them together is **concurrency**: one logical task structured so its waits overlap. Well-designed systems exploit both, and the sibling topics own the details — Scaling covers the machine-level story, Sync vs Async Communication covers the service-to-service one.
+The same distinction scales up a level. A horizontally scaled service — 40 [stateless replicas](/SystemDesign/topics/scalability/stateful-vs-stateless/) behind a [load balancer](/SystemDesign/topics/scalability/load-balancing/) — is **parallelism across machines**: many requests physically executing at once. Inside each replica, a request handler that fires three database queries and awaits them together is **concurrency**: one logical task structured so its waits overlap. Well-designed systems exploit both, and the sibling topics own the details — [Scaling](/SystemDesign/topics/scalability/scaling/) covers the machine-level story, [Sync vs Async Communication](/SystemDesign/topics/architecture-patterns/sync-vs-async/) covers the service-to-service one.
 
 ## When to reach for which
 
