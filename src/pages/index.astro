@@ -28,6 +28,9 @@ const simTotal = topics.filter((t) => t.data.tier === 'flagship').length;
       A visual map of the concepts behind large-scale systems — {topics.length} topics with
       original explanations, diagrams, and {simTotal} interactive simulations you can poke at.
     </p>
+    <a class="cta" href={withBase('/studio/')}>
+      <span aria-hidden="true">⚡</span> Build your own system in the Design Studio
+    </a>
   </section>
   <section class="grid">
     {cards.map((c) => <CategoryCard {...c} />)}
@@ -54,6 +57,26 @@ const simTotal = topics.filter((t) => t.data.tier === 'flagship').length;
   .hero p {
     color: var(--text-muted);
     font-size: 1.1rem;
+  }
+
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 1.25rem;
+    padding: 0.6rem 1.1rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--accent-dim);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+
+  .cta:hover {
+    text-decoration: none;
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
   }
 
   .grid {
