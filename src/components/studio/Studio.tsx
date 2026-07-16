@@ -76,8 +76,14 @@ function subInfo(n: SimNode): string {
 }
 
 export default function Studio() {
-  const start = useRef(initialState());
-  const world = useRef<World>(initWorld(start.current.graph));
+  // Lazy one-time init: the args to useRef are evaluated on every render, so
+  // computing the graph/world inline would re-parse the URL and allocate a
+  // throwaway World ~60×/s during play. useState's lazy initializer and the
+  // null-guarded ref run exactly once.
+  const [start] = useState(initialState);
+  const world = useRef<World>(null!);
+  if (!world.current) world.current = initWorld(start.graph);
+
   const svgRef = useRef<SVGSVGElement>(null);
   const drag = useRef<Drag>({ mode: 'idle' });
   const idc = useRef(1000);
@@ -85,7 +91,7 @@ export default function Studio() {
   const [playing, setPlaying] = useState(
     () => typeof window === 'undefined' || !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
   );
-  const [rate, setRate] = useState(start.current.rate);
+  const [rate, setRate] = useState(start.rate);
   const [selected, setSelected] = useState<Selected | null>(null);
   const [copied, setCopied] = useState(false);
   const [, setTick] = useState(0);
@@ -106,13 +112,13 @@ export default function Studio() {
       if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       const el = document.activeElement;
       if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return;
+      e.preventDefault();
       const sel = selRef.current;
       if (!sel) return;
       if (sel.kind === 'node') removeNode(world.current, sel.id);
       else removeEdge(world.current, sel.from, sel.to);
       setSelected(null);
       repaint();
-      e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -134,41 +140,51 @@ export default function Studio() {
   const clampX = (x: number) => Math.max(0, Math.min(VW - NODE_W, x));
   const clampY = (y: number) => Math.max(0, Math.min(VH - NODE_H, y));
 
-  // --- palette drag-to-add (tracked on window so it works across elements) ---
+  // --- palette drag-to-add ---
+  // Capture the pointer on the chip itself, so move/up/cancel all route back
+  // here even while the cursor is over the canvas. This keeps the canvas's own
+  // pointerup from firing (and clobbering this gesture), and the capture is
+  // released automatically on up/cancel/unmount — no window listeners to leak.
   const onChipPointerDown = (type: NodeType, e: RPE) => {
     e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
     const p = toSvg(e.clientX, e.clientY);
     drag.current = { mode: 'new', type, x: p.x, y: p.y, inside: false };
-    const move = (ev: PointerEvent) => {
-      const d = drag.current;
-      if (d.mode !== 'new') return;
-      const q = toSvg(ev.clientX, ev.clientY);
-      const rect = svgRef.current?.getBoundingClientRect();
-      d.x = q.x;
-      d.y = q.y;
-      d.inside =
-        !!rect &&
-        ev.clientX >= rect.left &&
-        ev.clientX <= rect.right &&
-        ev.clientY >= rect.top &&
-        ev.clientY <= rect.bottom;
-      repaint();
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      const d = drag.current;
-      if (d.mode === 'new' && d.inside) {
-        const id = `s${idc.current++}`;
-        addNode(world.current, makeGraphNode(d.type, clampX(d.x - NODE_W / 2), clampY(d.y - NODE_H / 2), id));
-        setSelected({ kind: 'node', id });
-      }
+    repaint();
+  };
+
+  const onChipPointerMove = (e: RPE) => {
+    const d = drag.current;
+    if (d.mode !== 'new') return;
+    const p = toSvg(e.clientX, e.clientY);
+    const rect = svgRef.current?.getBoundingClientRect();
+    d.x = p.x;
+    d.y = p.y;
+    d.inside =
+      !!rect &&
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom;
+    repaint();
+  };
+
+  const onChipPointerUp = (e: RPE) => {
+    const d = drag.current;
+    if (d.mode === 'new' && d.inside) {
+      const id = `s${idc.current++}`;
+      addNode(world.current, makeGraphNode(d.type, clampX(d.x - NODE_W / 2), clampY(d.y - NODE_H / 2), id));
+      setSelected({ kind: 'node', id });
+    }
+    drag.current = { mode: 'idle' };
+    repaint();
+  };
+
+  const onChipPointerCancel = () => {
+    if (drag.current.mode === 'new') {
       drag.current = { mode: 'idle' };
       repaint();
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    repaint();
+    }
   };
 
   // --- node / port / edge interactions on the canvas ---
@@ -210,6 +226,9 @@ export default function Studio() {
 
   const onCanvasPointerUp = (e: RPE) => {
     const d = drag.current;
+    // Palette-add ('new') is handled on the chip (pointer-captured there), so
+    // never touch its state here — the guard also covers 'idle'.
+    if (d.mode !== 'node' && d.mode !== 'edge') return;
     try {
       svgRef.current?.releasePointerCapture(e.pointerId);
     } catch {
@@ -336,7 +355,12 @@ export default function Studio() {
       </div>
 
       <div className="studio-main">
-        <Palette onChipPointerDown={onChipPointerDown} />
+        <Palette
+          onChipPointerDown={onChipPointerDown}
+          onChipPointerMove={onChipPointerMove}
+          onChipPointerUp={onChipPointerUp}
+          onChipPointerCancel={onChipPointerCancel}
+        />
 
         <div className="studio-canvas-wrap">
           <svg

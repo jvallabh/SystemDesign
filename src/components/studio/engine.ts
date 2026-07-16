@@ -235,7 +235,12 @@ function aliveSuccessors(w: World, n: SimNode): string[] {
 function effCap(n: SimNode): number {
   if (n.type === 'app') {
     const inst = Math.max(1, n.params.instances);
-    return inst * n.params.capacity * (1 - 0.03 * (inst - 1));
+    // Floor the coordination-overhead factor so a crafted instance count can
+    // never drive effective capacity to zero or negative — that would blackhole
+    // traffic while the node still read as idle (arrivals dropped before they
+    // are counted, so utilization would show 0%).
+    const eff = Math.max(0.1, 1 - 0.03 * (inst - 1));
+    return inst * n.params.capacity * eff;
   }
   return n.params.capacity;
 }
@@ -381,7 +386,7 @@ function reconcile(w: World): void {
   for (const n of w.nodes) {
     const p = n.params;
     p.capacity = Math.max(EPS, p.capacity);
-    p.instances = Math.max(1, Math.round(p.instances));
+    p.instances = Math.min(64, Math.max(1, Math.round(p.instances)));
     p.hitRatio = Math.min(1, Math.max(0, p.hitRatio));
     p.queueCap = Math.max(1, Math.round(p.queueCap));
     if (n.queue.length > p.queueCap) {

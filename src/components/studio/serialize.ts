@@ -88,11 +88,14 @@ export function decode(str: string): Graph {
   });
 
   const edges: Edge[] = [];
+  const seen = new Set<string>();
   for (const tok of edgeTokens) {
     if (!tok) continue;
     const a = parseInt(tok.split('-')[0], 10);
     const b = parseInt(tok.split('-')[1], 10);
-    if (a >= 0 && a < nodes.length && b >= 0 && b < nodes.length && a !== b) {
+    const key = `${a}-${b}`;
+    if (a >= 0 && a < nodes.length && b >= 0 && b < nodes.length && a !== b && !seen.has(key)) {
+      seen.add(key);
       edges.push({ from: nodes[a].id, to: nodes[b].id });
     }
   }
