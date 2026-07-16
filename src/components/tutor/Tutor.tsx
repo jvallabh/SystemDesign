@@ -118,9 +118,20 @@ export default function Tutor() {
   }
 
   // --- conversation control ---
+  // Abort any in-flight turn and relinquish ownership of abortRef so that
+  // turn's catch/finally become no-ops (see the stale() guard in runTurn).
+  // Used by actions that supersede the current conversation.
+  function abortActive() {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setBusy(false);
+  }
+
   function switchMode(next: Mode) {
     if (next === mode) return;
-    abortRef.current?.abort();
+    abortActive();
     setMode(next);
     setScenario(null);
     setTranscript([]);
@@ -129,7 +140,7 @@ export default function Tutor() {
   }
 
   function selectScenario(s: Scenario) {
-    abortRef.current?.abort();
+    abortActive();
     setScenario(s);
     historyRef.current = [];
     setTranscript([{ id: newId(), role: 'assistant', text: s.opening }]);
@@ -137,13 +148,14 @@ export default function Tutor() {
   }
 
   function leaveScenario() {
-    abortRef.current?.abort();
+    abortActive();
     setScenario(null);
     setTranscript([]);
     historyRef.current = [];
     setError(null);
   }
 
+  // Stop button: abort but keep ownership so the partial answer is committed.
   function stop() {
     abortRef.current?.abort();
   }
@@ -172,6 +184,11 @@ export default function Tutor() {
     abortRef.current = controller;
     setBusy(true);
 
+    // This turn owns abortRef only while it still points at our controller.
+    // A superseding action (switchMode / selectScenario / leaveScenario) nulls
+    // it via abortActive; once stale, our catch/finally must write nothing.
+    const stale = () => abortRef.current !== controller;
+
     const userMsg: Anthropic.MessageParam = { role: 'user', content: apiUserText };
     const baseHistory: Anthropic.MessageParam[] = [...historyRef.current, userMsg];
 
@@ -183,6 +200,14 @@ export default function Tutor() {
     ]);
 
     let partial = '';
+    // At each new assistant round, clear the displayed + committed text so
+    // intermediate tool-round narration ("Let me check…") is not prepended to
+    // the final synthesis answer. The structured history sent to the API is
+    // unaffected — streamTurn builds that separately.
+    const onRoundStart = () => {
+      partial = '';
+      setTranscript((t) => t.map((m) => (m.id === asstId ? { ...m, text: '' } : m)));
+    };
     const onText = (delta: string) => {
       partial += delta;
       setTranscript((t) => t.map((m) => (m.id === asstId ? { ...m, text: partial } : m)));
@@ -198,16 +223,19 @@ export default function Tutor() {
         history: baseHistory,
         tools: mode === 'ask' ? [READ_TOPIC_TOOL] : undefined,
         readTopic: mode === 'ask' ? readTopic : undefined,
+        onRoundStart,
         onText,
         signal: controller.signal,
       });
+      if (stale()) return;
       historyRef.current = [...baseHistory, ...appended];
       setTranscript((t) =>
         t.map((m) => (m.id === asstId ? { ...m, streaming: false, text: partial } : m)),
       );
     } catch (e) {
+      if (stale()) return; // superseded by a mode/scenario switch — write nothing
       if (e instanceof Anthropic.APIUserAbortError) {
-        // Keep the partial text; commit it to history so the chat can continue.
+        // Stop button: keep the partial text; commit it so the chat can continue.
         historyRef.current = [
           ...baseHistory,
           { role: 'assistant', content: partial || '(stopped)' },
@@ -222,8 +250,10 @@ export default function Tutor() {
         handleError(e);
       }
     } finally {
-      setBusy(false);
-      abortRef.current = null;
+      if (!stale()) {
+        setBusy(false);
+        abortRef.current = null;
+      }
     }
   }
 
@@ -255,6 +285,7 @@ export default function Tutor() {
             aria-selected={mode === 'ask'}
             className={mode === 'ask' ? 'active' : ''}
             onClick={() => switchMode('ask')}
+            disabled={busy}
           >
             Ask the Atlas
           </button>
@@ -263,6 +294,7 @@ export default function Tutor() {
             aria-selected={mode === 'interview'}
             className={mode === 'interview' ? 'active' : ''}
             onClick={() => switchMode('interview')}
+            disabled={busy}
           >
             Mock interview
           </button>
@@ -378,7 +410,7 @@ export default function Tutor() {
                   key={s.id}
                   className="tutor-scenario"
                   onClick={() => selectScenario(s)}
-                  disabled={!corpus || !apiKey}
+                  disabled={!corpus || !apiKey || busy}
                 >
                   <span className="tutor-scenario-title">{s.title}</span>
                   <span className="tutor-scenario-blurb">Covers {s.topicIds.length} core topics</span>

@@ -19,17 +19,34 @@ export interface Corpus {
   topics: CorpusTopic[];
 }
 
+/** Drop top-level ESM import/export lines, but never inside a fenced code block. */
+function stripEsmLines(raw: string): string {
+  const kept: string[] = [];
+  let inFence = false;
+  for (const line of raw.split('\n')) {
+    if (/^```/.test(line)) {
+      inFence = !inFence;
+      kept.push(line);
+      continue;
+    }
+    // Only strip MDX component imports/exports; a JS `import …` inside a code
+    // fence is prose to keep.
+    if (!inFence && /^(?:import|export)\s/.test(line)) continue;
+    kept.push(line);
+  }
+  return kept.join('\n');
+}
+
 /**
  * Reduce a raw MDX body (frontmatter already removed by Astro) to plain
- * teaching prose. Removes ESM import/export lines, `<Diagram>` blocks and their
- * inline SVGs (the bulk of the raw size), any remaining capitalized JSX
- * components (self-closing and paired), and collapses runs of blank lines.
- * Headings, prose, code fences, and tables are preserved.
+ * teaching prose. Removes ESM import/export lines (outside code fences),
+ * `<Diagram>` blocks and their inline SVGs (the bulk of the raw size), any
+ * remaining capitalized JSX components (self-closing and paired), and collapses
+ * runs of blank lines. Headings, prose, code fences, and tables are preserved.
  */
 export function stripMdx(raw: string): string {
-  let out = raw;
-  // ESM import/export statement lines (MDX component imports).
-  out = out.replace(/^(?:import|export)\s.*$/gm, '');
+  // ESM import/export statement lines (MDX component imports), fence-aware.
+  let out = stripEsmLines(raw);
   // `<Diagram …>…</Diagram>` blocks, including the inline SVG they wrap.
   out = out.replace(/<Diagram\b[\s\S]*?<\/Diagram>/g, '');
   // Remaining paired capitalized JSX components: `<Foo …>…</Foo>`.

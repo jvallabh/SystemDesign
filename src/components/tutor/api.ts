@@ -52,6 +52,12 @@ export interface StreamTurnArgs {
   tools?: Anthropic.Tool[];
   /** Resolve a read_topic call locally; return null for an unknown id. */
   readTopic?: (id: string) => string | null;
+  /**
+   * Called at the start of each assistant round (before streaming). Lets the
+   * caller reset its text accumulator so pre-tool narration from an earlier
+   * round is not prepended to the final synthesis round's answer.
+   */
+  onRoundStart?: () => void;
   /** Called with each streamed text delta. */
   onText: (delta: string) => void;
   signal?: AbortSignal;
@@ -65,7 +71,7 @@ export interface StreamTurnArgs {
  * Errors (typed SDK exceptions, AbortError) propagate to the caller.
  */
 export async function streamTurn(args: StreamTurnArgs): Promise<Anthropic.MessageParam[]> {
-  const { client, model, system, tools, readTopic, onText, signal } = args;
+  const { client, model, system, tools, readTopic, onRoundStart, onText, signal } = args;
   const canUseTools = Boolean(tools && tools.length && readTopic);
 
   const appended: Anthropic.MessageParam[] = [];
@@ -75,6 +81,9 @@ export async function streamTurn(args: StreamTurnArgs): Promise<Anthropic.Messag
     // On the final round, drop tools so the model must produce a text answer
     // (guaranteeing no dangling tool_use is left in the transcript).
     const withTools = canUseTools && round < MAX_TOOL_ROUNDS;
+
+    // Start of a new assistant round — let the caller clear its display buffer.
+    onRoundStart?.();
 
     const stream = client.messages.stream(
       {

@@ -1,9 +1,15 @@
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
 import { withBase } from '../../utils/url';
+import { CITATION_RE } from './prompts';
 
-// Inline tokens, in priority order: `code`, **bold**, [[citation]].
-const INLINE_RE = /`([^`]+)`|\*\*([^*]+)\*\*|\[\[([a-z-]+\/[a-z0-9-]+)\]\]/g;
+// Inline tokens, in priority order: `code`, **bold**, [[citation]]. The citation
+// alternative reuses CITATION_RE (the single source of truth) — its own capture
+// group becomes group 4 (the id); group 3 is the whole `[[…]]` match.
+const INLINE_RE = new RegExp(
+  `\`([^\`]+)\`|\\*\\*([^*]+)\\*\\*|(${CITATION_RE.source})`,
+  'g',
+);
 
 /** Look up a topic title by id; returns undefined for ids not in the corpus. */
 export type TitleFor = (id: string) => string | undefined;
@@ -23,7 +29,7 @@ function renderInline(text: string, titleFor: TitleFor, keyBase: string): ReactN
     } else if (m[2] !== undefined) {
       nodes.push(<strong key={key}>{m[2]}</strong>);
     } else if (m[3] !== undefined) {
-      const id = m[3];
+      const id = m[4];
       const title = titleFor(id);
       if (title !== undefined) {
         nodes.push(
