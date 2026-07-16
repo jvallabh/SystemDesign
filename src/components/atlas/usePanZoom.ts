@@ -7,6 +7,12 @@
  * - double-click → reset
  * - zoomIn/zoomOut/reset → the visible + / − / ⟲ buttons (zoom about centre)
  *
+ * Client coordinates are mapped to SVG user space via the element's own CTM
+ * (mirrors `Studio.tsx`'s `toSvg`), not rect ratios — so the point under the
+ * cursor stays fixed even when `.atlas-svg { max-height }` letterboxes the
+ * viewBox (`preserveAspectRatio="xMidYMid meet"`). getScreenCTM() null cases
+ * no-op.
+ *
  * SSR-safe: initial state is the base viewBox, no `window` at init. The wheel
  * listener is attached natively (non-passive) because React marks `onWheel`
  * passive, which would make preventDefault a no-op — hence the returned svgRef.
@@ -32,6 +38,22 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
+/** Map client (screen) coords to SVG user space via the live CTM; null if the
+ *  element/CTM isn't available (accounts for viewBox + letterbox offset). */
+function clientToUser(
+  svg: SVGSVGElement,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } | null {
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return null;
+  const pt = svg.createSVGPoint();
+  pt.x = clientX;
+  pt.y = clientY;
+  const p = pt.matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
+
 export function usePanZoom(base: Base) {
   const [view, setView] = useState<View>({ x: 0, y: 0, scale: 1 });
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -46,25 +68,27 @@ export function usePanZoom(base: Base) {
     startY: number;
     vx: number;
     vy: number;
-    scale: number;
+    // user→screen scale (CTM.a); constant during a pan since zoom can't change
+    // mid-drag. Converts a screen-pixel delta into a viewBox (user) delta.
+    scaleS: number;
   } | null>(null);
 
   const viewBox = `${view.x} ${view.y} ${base.w / view.scale} ${base.h / view.scale}`;
 
-  // Zoom about a point given as fractions (fx,fy) of the SVG box, keeping that
-  // point fixed on screen.
-  const zoomAt = useCallback(
-    (fx: number, fy: number, factor: number) => {
+  // Zoom by `factor`, keeping the user-space `anchor` fixed on screen. A null
+  // anchor zooms about the current viewBox centre (used by the buttons).
+  const applyZoom = useCallback(
+    (factor: number, anchor: { x: number; y: number } | null) => {
       setView((prev) => {
         const newScale = clamp(prev.scale * factor, MIN_SCALE, MAX_SCALE);
         if (newScale === prev.scale) return prev;
         const curW = base.w / prev.scale;
         const curH = base.h / prev.scale;
-        const svgX = prev.x + fx * curW;
-        const svgY = prev.y + fy * curH;
-        const newW = base.w / newScale;
-        const newH = base.h / newScale;
-        return { x: svgX - fx * newW, y: svgY - fy * newH, scale: newScale };
+        const ax = anchor ? anchor.x : prev.x + curW / 2;
+        const ay = anchor ? anchor.y : prev.y + curH / 2;
+        // Keep (ax,ay) at the same screen position across the scale change.
+        const ratio = prev.scale / newScale;
+        return { x: ax - (ax - prev.x) * ratio, y: ay - (ay - prev.y) * ratio, scale: newScale };
       });
     },
     [base.w, base.h],
@@ -76,20 +100,20 @@ export function usePanZoom(base: Base) {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
-      const fx = clamp((e.clientX - rect.left) / rect.width, 0, 1);
-      const fy = clamp((e.clientY - rect.top) / rect.height, 0, 1);
+      const u = clientToUser(el, e.clientX, e.clientY);
+      if (!u) return;
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      zoomAt(fx, fy, factor);
+      applyZoom(factor, u);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [zoomAt]);
+  }, [applyZoom]);
 
   const onPointerDown = useCallback((e: ReactPointerEvent<SVGSVGElement>) => {
     // Ignore drags that begin on a node link so click + keyboard focus survive.
     if ((e.target as Element).closest('a')) return;
+    const ctm = e.currentTarget.getScreenCTM();
+    if (!ctm) return;
     const v = viewRef.current;
     panRef.current = {
       pointerId: e.pointerId,
@@ -97,25 +121,18 @@ export function usePanZoom(base: Base) {
       startY: e.clientY,
       vx: v.x,
       vy: v.y,
-      scale: v.scale,
+      scaleS: ctm.a || 1,
     };
     e.currentTarget.setPointerCapture(e.pointerId);
   }, []);
 
-  const onPointerMove = useCallback(
-    (e: ReactPointerEvent<SVGSVGElement>) => {
-      const p = panRef.current;
-      if (!p || p.pointerId !== e.pointerId) return;
-      const rect = e.currentTarget.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
-      const curW = base.w / p.scale;
-      const curH = base.h / p.scale;
-      const mx = ((e.clientX - p.startX) / rect.width) * curW;
-      const my = ((e.clientY - p.startY) / rect.height) * curH;
-      setView((prev) => ({ ...prev, x: p.vx - mx, y: p.vy - my }));
-    },
-    [base.w, base.h],
-  );
+  const onPointerMove = useCallback((e: ReactPointerEvent<SVGSVGElement>) => {
+    const p = panRef.current;
+    if (!p || p.pointerId !== e.pointerId) return;
+    const dx = (e.clientX - p.startX) / p.scaleS;
+    const dy = (e.clientY - p.startY) / p.scaleS;
+    setView((prev) => ({ ...prev, x: p.vx - dx, y: p.vy - dy }));
+  }, []);
 
   const endPan = useCallback((e: ReactPointerEvent<SVGSVGElement>) => {
     const p = panRef.current;
@@ -136,8 +153,8 @@ export function usePanZoom(base: Base) {
     [reset],
   );
 
-  const zoomIn = useCallback(() => zoomAt(0.5, 0.5, 1.25), [zoomAt]);
-  const zoomOut = useCallback(() => zoomAt(0.5, 0.5, 1 / 1.25), [zoomAt]);
+  const zoomIn = useCallback(() => applyZoom(1.25, null), [applyZoom]);
+  const zoomOut = useCallback(() => applyZoom(1 / 1.25, null), [applyZoom]);
 
   return {
     viewBox,
