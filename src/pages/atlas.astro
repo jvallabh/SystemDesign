@@ -1,0 +1,69 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import AtlasMap from '../components/atlas/AtlasMap';
+import { buildGraph } from '../components/atlas/graph';
+import { computeLayout } from '../components/atlas/layout';
+
+const entries = (await getCollection('topics', ({ data }) => !data.draft)).map((t) => ({
+  id: t.id,
+  title: t.data.title,
+  category: t.data.category,
+  tier: t.data.tier,
+  related: t.data.related,
+}));
+
+// Both are pure functions of build-time data; results serialize to the island.
+const graph = buildGraph(entries);
+const positions = computeLayout(graph);
+
+// Determinism guard (dev only): the layout must be a pure function of the graph,
+// or the SSR SVG would not match the client's first render.
+if (import.meta.env.DEV) {
+  const again = computeLayout(graph);
+  if (JSON.stringify(positions) !== JSON.stringify(again)) {
+    throw new Error('Atlas layout is not deterministic — SSR/client render would diverge.');
+  }
+}
+---
+
+<BaseLayout
+  title="Atlas Map"
+  description="An explorable concept map of every System Design Atlas topic — nodes coloured by category, edges drawn from how topics relate. Hover to trace a topic's neighbourhood, then click through to the article."
+  wide
+>
+  <div class="atlas-page">
+    <header class="atlas-intro">
+      <h1>The Atlas</h1>
+      <p>
+        Every topic on the site, drawn as one map. Nodes are coloured by category and sized by how many
+        neighbours they have; edges come from how the articles relate to one another. Hover or focus a node to
+        light up its neighbourhood, drag to pan, scroll to zoom, and click any node to open its article.
+      </p>
+    </header>
+    <AtlasMap client:load graph={graph} positions={positions} />
+  </div>
+</BaseLayout>
+
+<style>
+  .atlas-page {
+    max-width: 1220px;
+    margin: 0 auto;
+  }
+
+  .atlas-intro {
+    margin-bottom: 1.25rem;
+  }
+
+  .atlas-intro h1 {
+    font-size: 1.9rem;
+    margin: 0 0 0.4rem;
+  }
+
+  .atlas-intro p {
+    color: var(--text-muted);
+    max-width: 48rem;
+    margin: 0;
+    font-size: 1rem;
+  }
+</style>
