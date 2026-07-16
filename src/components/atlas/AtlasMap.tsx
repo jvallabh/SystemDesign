@@ -62,12 +62,12 @@ export default function AtlasMap({ graph, positions }: Props) {
           ref={svgRef}
           className="atlas-svg"
           viewBox={viewBox}
-          role="img"
-          aria-label={`Concept map of ${graph.nodes.length} system design topics, linked by relation and grouped by category. Pan by dragging, zoom with the wheel or the on-screen buttons.`}
+          role="group"
+          aria-label={`Atlas concept map: ${graph.nodes.length} topics connected by relatedness`}
           {...svgHandlers}
         >
-          {/* Edges first, under the nodes. */}
-          <g>
+          {/* Edges first, under the nodes — decorative (relationships are conveyed by node aria-labels). */}
+          <g aria-hidden="true">
             {graph.edges.map((edge) => {
               const a = positions[edge.source];
               const b = positions[edge.target];
@@ -101,6 +101,7 @@ export default function AtlasMap({ graph, positions }: Props) {
                   key={node.id}
                   className="atlas-node"
                   href={withBase(`/topics/${node.id}/`)}
+                  aria-label={node.tier === 'flagship' ? `${node.title} — has interactive sim` : node.title}
                   style={{ opacity: active ? 1 : 0.18 }}
                   onPointerEnter={() => setHighlightId(node.id)}
                   onPointerLeave={() => setHighlightId(null)}
@@ -116,6 +117,7 @@ export default function AtlasMap({ graph, positions }: Props) {
                       r={r + 4}
                       fill="none"
                       strokeWidth={1.5}
+                      aria-hidden="true"
                     />
                   )}
                   <circle
@@ -126,7 +128,13 @@ export default function AtlasMap({ graph, positions }: Props) {
                     strokeWidth={1}
                     style={{ fill: CATEGORY_VAR[node.category] }}
                   />
-                  <text className="svg-label small atlas-label" x={p.x} y={p.y + r + 13} textAnchor="middle">
+                  <text
+                    className="svg-label small atlas-label"
+                    x={p.x}
+                    y={p.y + r + 13}
+                    textAnchor="middle"
+                    aria-hidden="true"
+                  >
                     {node.title}
                   </text>
                 </a>
