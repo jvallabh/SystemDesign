@@ -1,0 +1,60 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Studio from '../components/studio/Studio';
+---
+
+<BaseLayout
+  title="The Design Studio"
+  description="Compose a system from load balancers, caches, queues and databases, turn on traffic, and watch it flow, back up, and cascade-fail — a live queueing-network sandbox."
+  wide
+>
+  <div class="studio-page">
+    <header class="studio-intro">
+      <h1>The Design Studio</h1>
+      <p>
+        Drag components onto the canvas, wire them into a system, and turn on traffic. Throughput, tail latency, and
+        drops are measured live from the requests flowing through — click a node to kill it and watch the failure
+        cascade. Load a preset to start from a real design, or share your own as a link.
+      </p>
+    </header>
+    <Studio client:only="react">
+      <div slot="fallback" class="studio-skeleton">Loading the Design Studio…</div>
+    </Studio>
+  </div>
+</BaseLayout>
+
+<style>
+  .studio-page {
+    max-width: 1220px;
+    margin: 0 auto;
+  }
+
+  .studio-intro {
+    margin-bottom: 1.25rem;
+  }
+
+  .studio-intro h1 {
+    font-size: 1.9rem;
+    margin: 0 0 0.4rem;
+  }
+
+  .studio-intro p {
+    color: var(--text-muted);
+    max-width: 48rem;
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .studio-skeleton {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 640px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+  }
+</style>

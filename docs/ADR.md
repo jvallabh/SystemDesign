@@ -42,6 +42,10 @@
 
 **Context.** Linking during parallel authorship invites broken/inconsistent anchors while pages are still being rewritten. **Decision.** Articles reference sibling topics as plain text; a Phase 8 pass wires real links site-wide once content is frozen. **Consequences.** Zero broken internal links shipped; the plain-text mentions are grep-able as the link-candidate inventory for Phase 8.
 
+## ADR-12: The Design Studio embeds as a `client:only` island
+
+**Context.** The Design Studio (`/studio`) is a full-page interactive app, not a mid-article sim. Its initial graph can come from the URL's `?d=` share param — client-only state that cannot be known at build time. **Decision.** Embed `<Studio client:only="react" />` with a sized `slot="fallback"` skeleton, a deliberate exception to the DECISIONS "never client:only" rule (which governs *mid-article* sims that need a zero-JS fallback and no layout shift). **Consequences.** No SSR/hydration-mismatch class for the app; an empty canvas has no SEO value to pre-render anyway; the fallback skeleton avoids layout shift. `client:only` still emits exactly one `<astro-island>`, so the per-flagship island-count check generalizes to `/studio/`. The Studio brings its own 3-pane chrome (palette · canvas · inspector) instead of `SimFrame`, but reuses the engine contract, control kit, `useRafLoop`, theming utilities, and `withBase`.
+
 ## ADR-11: Build-process docs kept local and gitignored — SUPERSEDED
 
 **Context.** The repo is public; EXPLAINER/ROADMAP/ADR discuss internal process and tooling detail. **Original decision.** Keep these three files gitignored in `docs/`. **Superseded 2026-07-11:** committed to the repo by explicit choice — the process detail is worth sharing and the docs gain history/backup. **Consequences.** These docs are public; keep anything genuinely private out of them.

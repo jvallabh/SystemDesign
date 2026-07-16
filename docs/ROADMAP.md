@@ -2,6 +2,19 @@
 
 > Status date: 2026-07-11. Companion docs: [EXPLAINER.md](EXPLAINER.md), [ADR.md](ADR.md).
 
+## Future directions
+
+"Break-the-ceiling" ideas that move the site beyond a read-only encyclopedia. Each has a detailed one-pager in [`docs/ideas/`](ideas/).
+
+| # | Idea | What it is | Status |
+|---|---|---|---|
+| 1 | [The Design Studio](ideas/01-design-studio.md) | Composable drag-and-drop sandbox that fuses the 12 sims into one queueing-network engine — the interview whiteboard. | **in progress** |
+| 2 | [AI Socratic tutor / mock-interviewer](ideas/02-ai-tutor.md) | LLM tutor grounded in the 30 articles; ask-anything + "design Twitter" mock-interview mode. Requires moving off pure-static (serverless or bring-your-own-key). | backlog |
+| 3 | [The literal Atlas graph](ideas/03-atlas-graph.md) | Zoomable spatial concept map built from the existing `related:` frontmatter, with progress overlaid. Data already exists; mostly a rendering problem. | backlog |
+| 4 | [Mastery layer](ideas/04-mastery-layer.md) | Active-recall quizzes, predict-the-sim challenges, spaced-repetition flashcards, localStorage progress. Highest ROI; fully client-side. | backlog |
+| 5 | ["Design X" case studies](ideas/05-case-studies.md) | Guided end-to-end designs (TinyURL, Twitter feed, chat) stitching primitives with pre-configured sims embedded. | backlog |
+| 6 | [Quick wins](ideas/06-quick-wins.md) | Shareable sim permalinks, a public "How this Atlas built itself" build-story page, and full-text search. | backlog |
+
 ## Shipped
 
 - **Site shell** (`90dc9cf`): Astro scaffold, dark/light theme, nav, 30 topic stubs, sim harness, GitHub Pages deploy.
