@@ -9,6 +9,9 @@ const topics = (await getCollection('topics', ({ data }) => !data.draft)).sort(
 
 const currentPath = Astro.url.pathname.replace(/\/$/, '');
 
+const atlasHref = withBase('/atlas/');
+const atlasActive = currentPath === atlasHref.replace(/\/$/, '');
+
 const groups = CATEGORIES.map((cat) => ({
   ...cat,
   topics: topics.filter((t) => t.data.category === cat.slug),
@@ -19,6 +22,15 @@ const groups = CATEGORIES.map((cat) => ({
   <a class="site-title" href={withBase('/')}>
     <span class="logo" aria-hidden="true">◈</span>
     System Design Atlas
+  </a>
+  <a
+    class:list={['featured', { active: atlasActive }]}
+    href={atlasHref}
+    aria-current={atlasActive ? 'page' : undefined}
+  >
+    <span class="logo" aria-hidden="true">✦</span>
+    Atlas Map
+    <span class="badge">new</span>
   </a>
   {
     groups.map((group) => (
@@ -63,6 +75,37 @@ const groups = CATEGORIES.map((cat) => ({
   .site-title:hover {
     text-decoration: none;
     color: var(--accent);
+  }
+
+  .featured {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.45rem 0.6rem;
+    margin-bottom: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-raised);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+
+  .featured:hover {
+    text-decoration: none;
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .featured.active {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+    color: var(--accent);
+  }
+
+  .featured .badge {
+    margin-left: auto;
   }
 
   .logo {

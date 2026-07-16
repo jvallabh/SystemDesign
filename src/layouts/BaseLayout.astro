@@ -9,12 +9,14 @@ interface Props {
   title: string;
   description?: string;
   ogType?: 'website' | 'article';
+  wide?: boolean;
 }
 
 const {
   title,
   description = 'Interactive explanations of system design concepts.',
   ogType = 'website',
+  wide = false,
 } = Astro.props;
 
 // Build the absolute page URL with exactly one base prefix, regardless of
@@ -87,7 +89,7 @@ const ogImage = new URL(withBase('/og-card.png'), Astro.site).href;
       <div class="theme-corner">
         <ThemeToggle />
       </div>
-      <main id="main">
+      <main id="main" class:list={{ wide }}>
         <slot />
       </main>
     </div>
@@ -113,6 +115,10 @@ const ogImage = new URL(withBase('/og-card.png'), Astro.site).href;
   main {
     min-width: 0;
     padding: 2.5rem 3rem 4rem;
+  }
+
+  main.wide {
+    padding: 1.5rem 1.5rem 2.5rem;
   }
 
   .topbar {

@@ -16,6 +16,7 @@ export const GET: APIRoute = async ({ site }) => {
 
   const urls = [
     new URL(`${base}/`, site).href,
+    new URL(`${base}/atlas/`, site).href,
     ...topics.map((t) => new URL(`${base}/topics/${t.id}/`, site).href),
   ];
 

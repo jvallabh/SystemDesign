@@ -1,0 +1,127 @@
+.atlas {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.atlas-stage {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+.atlas-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: min(76vh, 760px);
+  /* pointer-drag pans; stop the browser from scrolling/panning the page. */
+  touch-action: none;
+  cursor: grab;
+}
+
+.atlas-svg:active {
+  cursor: grabbing;
+}
+
+.atlas-node {
+  cursor: pointer;
+}
+
+/* The single opacity transition (highlight fade). Removed under reduced motion. */
+.atlas-node,
+.atlas-edge {
+  transition: opacity 0.15s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atlas-node,
+  .atlas-edge {
+    transition: none;
+  }
+}
+
+.atlas-node .atlas-label {
+  /* Let hover/pan hit the circle underneath rather than the text box. */
+  pointer-events: none;
+  user-select: none;
+}
+
+.atlas-node:hover .atlas-label,
+.atlas-node:focus-visible .atlas-label {
+  fill: var(--accent);
+}
+
+.atlas-node:focus-visible .atlas-dot {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.atlas-node:focus {
+  outline: none; /* focus is shown on the circle/label, not a box around the anchor */
+}
+
+/* Zoom controls, floating over the stage. */
+.atlas-controls {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.atlas-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-inset);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.atlas-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Legend. */
+.atlas-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.1rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.atlas-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.atlas-swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 3px;
+  flex: none;
+}
+
+.atlas-swatch-ring {
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 999px;
+  border: 1.5px solid var(--accent);
+  flex: none;
+}
