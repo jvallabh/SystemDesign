@@ -1,0 +1,60 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Tutor from '../components/tutor/Tutor';
+---
+
+<BaseLayout
+  title="AI Tutor"
+  description="A bring-your-own-key Claude tutor for system design, grounded in the 30 Atlas articles: ask grounded, cited questions or run a mock interview scored against a rubric."
+>
+  <div class="tutor-page">
+    <header class="tutor-intro">
+      <h1>AI Tutor</h1>
+      <p>
+        A Claude-powered tutor grounded in the 30 Atlas articles. It answers only from the corpus and
+        cites the topics it draws on, or plays interviewer for a mock system-design round. Bring your
+        own Anthropic API key — it is stored only in this browser and sent only to api.anthropic.com;
+        this site has no server and never sees it.
+      </p>
+    </header>
+    <Tutor client:only="react">
+      <div slot="fallback" class="tutor-skeleton">Loading the tutor…</div>
+    </Tutor>
+  </div>
+</BaseLayout>
+
+<style>
+  .tutor-page {
+    max-width: 960px;
+    margin: 0 auto;
+  }
+
+  .tutor-intro {
+    margin-bottom: 1.25rem;
+  }
+
+  .tutor-intro h1 {
+    font-size: 1.9rem;
+    margin: 0 0 0.4rem;
+  }
+
+  .tutor-intro p {
+    color: var(--text-muted);
+    max-width: 48rem;
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .tutor-skeleton {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 640px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+  }
+</style>
