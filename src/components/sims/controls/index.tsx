@@ -29,7 +29,7 @@ export function Slider({
         max={max}
         step={step}
         value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => onChange(Number(e.currentTarget.value))}
       />
     </label>
   );
@@ -46,7 +46,7 @@ export function Toggle({
 }) {
   return (
     <label className="sim-control sim-toggle">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.currentTarget.checked)} />
       <span className="sim-control-label">{label}</span>
     </label>
   );
