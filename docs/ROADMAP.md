@@ -1,6 +1,6 @@
 # ROADMAP — System Design Atlas
 
-> Status date: 2026-07-11. Companion docs: [EXPLAINER.md](EXPLAINER.md), [ADR.md](ADR.md).
+> Status date: 2026-08-03. Companion docs: [EXPLAINER.md](EXPLAINER.md), [ADR.md](ADR.md).
 
 ## Shipped
 
@@ -19,13 +19,14 @@
 
 ## Shipped — a11y contrast (2026-08-03)
 
-- Light-theme `--accent` darkened `#0d9488` → `#0f766e` (`theme.css`). Measured against the real light surfaces, the old value failed AA everywhere — 3.52:1 on `--bg`, 3.74:1 on `--bg-raised`, 3.28:1 on `--bg-inset`; the new one clears it at 5.15 / 5.47 / 4.80:1. Dark theme `#5eead4` untouched (13.06:1). `--accent-dim` stays a pale tint and light-mode `--glow` is already `none`, so diagram fills and glows are unaffected.
+- Light-theme `--accent` darkened `#0d9488` → `#0f766e` (`theme.css`). Measured against the real light surfaces, the old value failed AA everywhere — 3.52:1 on `--bg`, 3.74:1 on `--bg-raised`, 3.28:1 on `--bg-inset`; the new one clears it at 5.15 / 5.47 / 4.80:1. Dark theme `#5eead4` untouched (12.10–13.06:1 across the same three surfaces). `--accent-dim` stays a pale tint and light-mode `--glow` is already `none`, so diagram fills and glows are unaffected.
 
 ## Backlog
 
 | Item | Where | Note |
 |---|---|---|
 | `scroll-behavior: smooth` not gated on reduced-motion | `global.css` | add `@media (prefers-reduced-motion: reduce)` override |
+| Light-theme `--ok` (#16a34a) as sim/diagram graphics is 2.89:1 on `--bg-inset` | `theme.css` | below the 3:1 non-text contrast threshold on the diagram canvas (3.10 on `--bg`, 3.30 on `--bg-raised` pass); never used as body text, so not an AA text failure |
 | Replication/replica-lag teaching has no owning page | `databases.mdx` | if a Replication topic is added, shrink to a pointer |
 | Per-topic OG images (one shared card today); sitemap lacks `<lastmod>` | layouts / `sitemap.xml.ts` | nice-to-have |
 | Hero card stagger hardcoded for 6 categories | `index.astro` | 7th category card would animate undelayed |
