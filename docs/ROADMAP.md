@@ -17,11 +17,14 @@
 - A11y: sims start paused for reduced-motion users, consistent `:focus-visible` ring, keyboard-accessible mobile nav toggle with `aria-expanded`.
 - Content-debt fixes from the old backlog: 8–16KB page size, clickstream clarification, JWT-verification reconciling sentence, Stripe versioning claim, REST diagram staggered, hop-latency numbers annotated.
 
+## Shipped — a11y contrast (2026-08-03)
+
+- Light-theme `--accent` darkened `#0d9488` → `#0f766e` (`theme.css`). Measured against the real light surfaces, the old value failed AA everywhere — 3.52:1 on `--bg`, 3.74:1 on `--bg-raised`, 3.28:1 on `--bg-inset`; the new one clears it at 5.15 / 5.47 / 4.80:1. Dark theme `#5eead4` untouched (13.06:1). `--accent-dim` stays a pale tint and light-mode `--glow` is already `none`, so diagram fills and glows are unaffected.
+
 ## Backlog
 
 | Item | Where | Note |
 |---|---|---|
-| **Light-theme `--accent` (#0d9488) as link/readout text fails AA** (3.74:1 on white) | `theme.css` / site-wide | brand-color decision: e.g. #0f766e ≈ 4.9:1; dark theme fine (12.7:1) |
 | `scroll-behavior: smooth` not gated on reduced-motion | `global.css` | add `@media (prefers-reduced-motion: reduce)` override |
 | Replication/replica-lag teaching has no owning page | `databases.mdx` | if a Replication topic is added, shrink to a pointer |
 | Per-topic OG images (one shared card today); sitemap lacks `<lastmod>` | layouts / `sitemap.xml.ts` | nice-to-have |
