@@ -25,7 +25,10 @@
   --border: #d8dde7;
   --text: #1a2233;
   --text-muted: #5a6478;
-  --accent: #0d9488;
+  /* #0f766e clears WCAG AA (4.5:1) on every light surface: 5.15:1 on --bg,
+     5.47:1 on --bg-raised, 4.80:1 on --bg-inset. The previous #0d9488 failed
+     all three (3.52 / 3.74 / 3.28). */
+  --accent: #0f766e;
   --accent-2: #4f46e5;
   --accent-dim: color-mix(in srgb, var(--accent) 12%, transparent);
   --danger: #dc2626;
