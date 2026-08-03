@@ -1,11 +1,11 @@
 ---
-import { getCollection } from 'astro:content';
 import { CATEGORIES } from '../data/categories';
 import { withBase } from '../utils/url';
+import { getOrderedTopics } from '../utils/topics';
 
-const topics = (await getCollection('topics', ({ data }) => !data.draft)).sort(
-  (a, b) => a.data.order - b.data.order || a.data.title.localeCompare(b.data.title)
-);
+// Same source of truth as the previous/next footer on topic pages, so the
+// sidebar order and the reading sequence can never drift apart.
+const topics = await getOrderedTopics();
 
 const currentPath = Astro.url.pathname.replace(/\/$/, '');
 

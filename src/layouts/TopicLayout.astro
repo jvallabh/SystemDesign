@@ -1,8 +1,10 @@
 ---
 import BaseLayout from './BaseLayout.astro';
 import FurtherLearning from '../components/FurtherLearning.astro';
+import TopicNav from '../components/TopicNav.astro';
 import { CATEGORIES } from '../data/categories';
 import { withBase } from '../utils/url';
+import { getTopicNeighbors } from '../utils/topics';
 import { getCollection } from 'astro:content';
 import type { CollectionEntry } from 'astro:content';
 
@@ -12,6 +14,7 @@ interface Props {
 
 const { entry } = Astro.props;
 const category = CATEGORIES.find((c) => c.slug === entry.data.category);
+const { prev, next } = await getTopicNeighbors(entry.id);
 
 let relatedTopics: CollectionEntry<'topics'>[] = [];
 if (entry.data.related.length > 0) {
@@ -62,6 +65,7 @@ if (entry.data.related.length > 0) {
         </section>
       )
     }
+    <TopicNav prev={prev} next={next} />
   </article>
 </BaseLayout>
 
