@@ -1,0 +1,107 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import { CATEGORIES } from '../data/categories';
+import { withBase } from '../utils/url';
+
+interface Props {
+  prev?: CollectionEntry<'topics'>;
+  next?: CollectionEntry<'topics'>;
+}
+
+const { prev, next } = Astro.props;
+
+const categoryTitle = (topic: CollectionEntry<'topics'>) =>
+  CATEGORIES.find((c) => c.slug === topic.data.category)?.title;
+---
+
+{
+  (prev || next) && (
+    <nav class="topic-nav" aria-label="Previous and next topic">
+      {prev && (
+        <a class="prev" rel="prev" href={withBase(`/topics/${prev.id}/`)}>
+          <span class="direction">
+            <span aria-hidden="true">←</span> Previous
+          </span>
+          <span class="title">{prev.data.title}</span>
+          <span class="category">{categoryTitle(prev)}</span>
+        </a>
+      )}
+      {next && (
+        <a class="next" rel="next" href={withBase(`/topics/${next.id}/`)}>
+          <span class="direction">
+            Next <span aria-hidden="true">→</span>
+          </span>
+          <span class="title">{next.data.title}</span>
+          <span class="category">{categoryTitle(next)}</span>
+        </a>
+      )}
+    </nav>
+  )
+}
+
+<style>
+  .topic-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    border-top: 1px solid var(--border);
+    margin-top: 2.5rem;
+    padding-top: 1.5rem;
+  }
+
+  /* Keep "next" on the right even when there is no "previous" (first topic). */
+  .next {
+    grid-column: 2;
+    text-align: right;
+  }
+
+  a {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.7rem 0.95rem;
+    text-decoration: none;
+    color: var(--text);
+  }
+
+  a:hover,
+  a:focus-visible {
+    border-color: var(--accent-2);
+    background: var(--accent-dim);
+    text-decoration: none;
+  }
+
+  .direction {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+
+  .title {
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--accent-2);
+  }
+
+  .category {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+
+  @media (max-width: 560px) {
+    .topic-nav {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* Stacked: both cards read left-to-right, next below previous. */
+    .next {
+      grid-column: 1;
+      text-align: left;
+    }
+  }
+</style>

@@ -1,15 +1,20 @@
 ---
-import { getCollection } from 'astro:content';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import CategoryCard from '../components/CategoryCard.astro';
 import { CATEGORIES } from '../data/categories';
 import { withBase } from '../utils/url';
+import { getOrderedTopics } from '../utils/topics';
 
-const topics = await getCollection('topics', ({ data }) => !data.draft);
+// Same source of truth as the sidebar and the previous/next footer. Filtering a
+// sorted list keeps each category's run in order, so `catTopics[0]` is where the
+// category's reading sequence starts — which is what the card should link to.
+// The previous inline sort compared `order` only, leaving ties to be settled by
+// whatever order the collection happened to arrive in.
+const topics = await getOrderedTopics();
 
 const cards = CATEGORIES.map((cat) => {
   const catTopics = topics.filter((t) => t.data.category === cat.slug);
-  const first = [...catTopics].sort((a, b) => a.data.order - b.data.order)[0];
+  const first = catTopics[0];
   return {
     category: cat,
     topicCount: catTopics.length,
