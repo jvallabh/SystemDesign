@@ -3,3 +3,7 @@ dist/
 .astro/
 .DS_Store
 npm-debug.log*
+
+# Scratch worktrees created by Claude Code agents; each is a transient
+# checkout with its own node_modules, never repository content.
+.claude/worktrees/
